@@ -19,18 +19,25 @@ export function setupGUI(parentContext) {
   // Make sure we reset the camera when the scene is changed or reloaded.
   parentContext.updateGUICallbacks.length = 0;
   parentContext.updateGUICallbacks.push((model, data, params) => {
-    // TODO: Use free camera parameters from MuJoCo
-    parentContext.camera.position.set(2.0, 1.7, 1.7);
-    parentContext.controls.target.set(0, 0.7, 0);
+    // Adjust camera based on scene
+    if (params.scene.includes('openduck')) {
+      parentContext.camera.position.set(0.5, 0.4, 0.5);
+      parentContext.controls.target.set(0, 0.15, 0);
+    } else {
+      parentContext.camera.position.set(2.0, 1.7, 1.7);
+      parentContext.controls.target.set(0, 0.7, 0);
+    }
     parentContext.controls.update(); });
 
   // Add scene selection dropdown.
   let reload = reloadFunc.bind(parentContext);
   parentContext.gui.add(parentContext.params, 'scene', {
+    "OpenDuck Mini": "openduck/scene_flat_terrain.xml",
+    "OpenDuck (Backlash)": "openduck/scene_flat_terrain_backlash.xml",
     "Humanoid": "humanoid.xml", "Cassie": "agility_cassie/scene.xml",
     "Hammock": "hammock.xml", "Balloons": "balloons.xml", "Hand": "shadow_hand/scene_right.xml",
     "Mug": "mug.xml", "Tendon": "model_with_tendon.xml",
-    "Torture Model": "model.xml", "Flex": "flex.xml", "Car": "car.xml", 
+    "Torture Model": "model.xml", "Flex": "flex.xml", "Car": "car.xml",
   }).name('Example Scene').onChange(reload);
 
   // Add a help menu.
@@ -243,14 +250,100 @@ export function setupGUI(parentContext) {
   });
   actuatorFolder.close();
 
+  // ========== OpenDuck Robot Controls ==========
+  if (parentContext.params.scene.includes('openduck')) {
+    let robotFolder = parentContext.gui.addFolder("Robot Control");
+
+    // Command state
+    parentContext.robotCommand = { x: 0, y: 0, rot: 0 };
+    parentContext.params.robotEnabled = false;
+
+    // Enable/disable robot control
+    robotFolder.add(parentContext.params, 'robotEnabled').name('Enable Control');
+
+    // Command display
+    parentContext.params.cmdX = 0;
+    parentContext.params.cmdY = 0;
+    parentContext.params.cmdRot = 0;
+    robotFolder.add(parentContext.params, 'cmdX', -0.15, 0.15, 0.01).name('Forward').listen();
+    robotFolder.add(parentContext.params, 'cmdY', -0.2, 0.2, 0.01).name('Lateral').listen();
+    robotFolder.add(parentContext.params, 'cmdRot', -1, 1, 0.1).name('Rotation').listen();
+
+    // Keyboard controls
+    const updateCommand = () => {
+      parentContext.params.cmdX = parentContext.robotCommand.x;
+      parentContext.params.cmdY = parentContext.robotCommand.y;
+      parentContext.params.cmdRot = parentContext.robotCommand.rot;
+    };
+
+    document.addEventListener('keydown', (event) => {
+      if (!parentContext.params.robotEnabled) return;
+
+      switch(event.key.toLowerCase()) {
+        case 'w': case 'arrowup':
+          parentContext.robotCommand.x = 0.15;
+          break;
+        case 's': case 'arrowdown':
+          parentContext.robotCommand.x = -0.15;
+          break;
+        case 'a': case 'arrowleft':
+          parentContext.robotCommand.y = 0.2;
+          break;
+        case 'd': case 'arrowright':
+          parentContext.robotCommand.y = -0.2;
+          break;
+        case 'q':
+          parentContext.robotCommand.rot = 1;
+          break;
+        case 'e':
+          parentContext.robotCommand.rot = -1;
+          break;
+      }
+      updateCommand();
+    });
+
+    document.addEventListener('keyup', (event) => {
+      if (!parentContext.params.robotEnabled) return;
+
+      switch(event.key.toLowerCase()) {
+        case 'w': case 's': case 'arrowup': case 'arrowdown':
+          parentContext.robotCommand.x = 0;
+          break;
+        case 'a': case 'd': case 'arrowleft': case 'arrowright':
+          parentContext.robotCommand.y = 0;
+          break;
+        case 'q': case 'e':
+          parentContext.robotCommand.rot = 0;
+          break;
+      }
+      updateCommand();
+    });
+
+    robotFolder.open();
+
+    // Add help text
+    actionInnerHTML += 'Forward / Back<br>';
+    keyInnerHTML += 'W / S<br>';
+    actionInnerHTML += 'Left / Right<br>';
+    keyInnerHTML += 'A / D<br>';
+    actionInnerHTML += 'Rotate L / R<br>';
+    keyInnerHTML += 'Q / E<br>';
+  }
+  // ========== End Robot Controls ==========
+
   // Add function that resets the camera to the default position.
   // Can be triggered by pressing ctrl + A.
   document.addEventListener('keydown', (event) => {
     if (event.ctrlKey && event.code === 'KeyA') {
-      // TODO: Use free camera parameters from MuJoCo
-      parentContext.camera.position.set(2.0, 1.7, 1.7);
-      parentContext.controls.target.set(0, 0.7, 0);
-      parentContext.controls.update(); 
+      // Reset camera based on scene
+      if (parentContext.params.scene.includes('openduck')) {
+        parentContext.camera.position.set(0.5, 0.4, 0.5);
+        parentContext.controls.target.set(0, 0.15, 0);
+      } else {
+        parentContext.camera.position.set(2.0, 1.7, 1.7);
+        parentContext.controls.target.set(0, 0.7, 0);
+      }
+      parentContext.controls.update();
       event.preventDefault();
     }
   });

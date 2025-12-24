@@ -10,7 +10,7 @@ import   load_mujoco        from '../node_modules/mujoco-js/dist/mujoco_wasm.js'
 const mujoco = await load_mujoco();
 
 // Set up Emscripten's Virtual File System
-var initialScene = "humanoid.xml";
+var initialScene = "openduck/scene_flat_terrain.xml";
 mujoco.FS.mkdir('/working');
 mujoco.FS.mount(mujoco.MEMFS, { root: '.' }, '/working');
 mujoco.FS.writeFile("/working/" + initialScene, await(await fetch("./assets/scenes/" + initialScene)).text());
@@ -39,7 +39,8 @@ export class MuJoCoDemo {
 
     this.camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 0.001, 100 );
     this.camera.name = 'PerspectiveCamera';
-    this.camera.position.set(2.0, 1.7, 1.7);
+    // OpenDuck Mini is small, so camera is closer
+    this.camera.position.set(0.5, 0.4, 0.5);
     this.scene.add(this.camera);
 
     this.scene.background = new THREE.Color(0.15, 0.25, 0.35);
@@ -83,7 +84,7 @@ export class MuJoCoDemo {
     this.container.appendChild( this.renderer.domElement );
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.target.set(0, 0.7, 0);
+    this.controls.target.set(0, 0.15, 0); // OpenDuck Mini height
     this.controls.panSpeed = 2;
     this.controls.zoomSpeed = 1;
     this.controls.enableDamping = true;

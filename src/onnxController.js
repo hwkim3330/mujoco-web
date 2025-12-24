@@ -31,8 +31,8 @@ export class OnnxController {
     this.defaultActuator = null;
 
     // Commands [lin_vel_x, lin_vel_y, ang_vel, neck_pitch, head_pitch, head_yaw, head_roll]
-    // Default forward walking command like test_walk.py
-    this.commands = [0.15, 0, 0, 0, 0, 0, 0];
+    // Start with zero command (standing still) for testing
+    this.commands = [0, 0, 0, 0, 0, 0, 0];
 
     // Imitation phase
     this.imitationI = 0;
@@ -457,8 +457,8 @@ export class OnnxController {
 
     this.imitationI = 0;
     this.imitationPhase = [0, 0];
-    // Keep default forward walking command
-    this.commands = [0.15, 0, 0, 0, 0, 0, 0];
+    // Keep zero command (standing still)
+    this.commands = [0, 0, 0, 0, 0, 0, 0];
     this.stepCounter = 0;
     this.pendingAction = null;
 

@@ -67,6 +67,9 @@ export class OnnxController {
       this.initState();
       this.findSensorAddresses();
 
+      // Run first inference immediately to have action ready
+      await this.runFirstInference();
+
       return true;
     } catch (e) {
       console.error('Failed to load ONNX model:', e);
@@ -375,6 +378,41 @@ export class OnnxController {
     // Start new inference
     if (!this.inferenceRunning) {
       this.runInference();
+    }
+  }
+
+  async runFirstInference() {
+    // Run initial inference synchronously so we have an action ready
+    console.log('Running initial inference...');
+    try {
+      const obs = this.getObservation();
+      console.log('Initial observation size:', obs.length);
+
+      const inputTensor = new ort.Tensor('float32', obs, [1, obs.length]);
+      const feeds = {};
+      feeds[this.inputName] = inputTensor;
+
+      const results = await this.session.run(feeds);
+      const output = results[this.outputName];
+
+      if (output) {
+        this.pendingAction = new Float32Array(output.data);
+        console.log('Initial action ready:', this.pendingAction.slice(0, 5));
+
+        // Apply initial action to motor targets immediately
+        for (let i = 0; i < this.numDofs; i++) {
+          this.motorTargets[i] = this.defaultActuator[i] + this.pendingAction[i] * this.actionScale;
+          this.prevMotorTargets[i] = this.motorTargets[i];
+        }
+
+        // Apply to ctrl
+        for (let i = 0; i < this.numDofs; i++) {
+          this.data.ctrl[i] = this.motorTargets[i];
+        }
+        console.log('Initial motor targets applied');
+      }
+    } catch (e) {
+      console.error('Initial inference error:', e);
     }
   }
 

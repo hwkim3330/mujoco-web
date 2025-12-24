@@ -12,14 +12,24 @@ export async function reloadFunc() {
   // Apply home keyframe for OpenDuck
   if (this.params.scene.includes('openduck') && this.model.nkey > 0) {
     const nq = this.model.nq;
+    const nv = this.model.nv;
     const nu = this.model.nu;
-    // Load keyframe 0 (home) qpos and ctrl
+
+    // Load keyframe 0 (home) qpos
     this.data.qpos.set(this.model.key_qpos.slice(0, nq));
+
+    // Reset velocities to zero (critical for stable start!)
+    for (let i = 0; i < nv; i++) {
+      this.data.qvel[i] = 0;
+    }
+
+    // Load keyframe ctrl
     if (this.model.key_ctrl) {
       this.data.ctrl.set(this.model.key_ctrl.slice(0, nu));
     }
+
     this.mujoco.mj_forward(this.model, this.data);
-    console.log('Applied home keyframe for OpenDuck');
+    console.log('Applied home keyframe for OpenDuck (qpos, qvel=0, ctrl)');
   }
 
   // Reinitialize ONNX controller with new model/data if loading OpenDuck

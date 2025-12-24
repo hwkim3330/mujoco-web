@@ -148,13 +148,25 @@ export class MuJoCoDemo {
     // Apply home keyframe for OpenDuck
     if (this.model.nkey > 0) {
       const nq = this.model.nq;
+      const nv = this.model.nv;
       const nu = this.model.nu;
+
+      // Set positions from keyframe
       this.data.qpos.set(this.model.key_qpos.slice(0, nq));
+
+      // Reset velocities to zero (critical for stable start!)
+      for (let i = 0; i < nv; i++) {
+        this.data.qvel[i] = 0;
+      }
+
+      // Set controls from keyframe
       if (this.model.key_ctrl) {
         this.data.ctrl.set(this.model.key_ctrl.slice(0, nu));
       }
+
+      // Update forward kinematics
       mujoco.mj_forward(this.model, this.data);
-      console.log('Applied home keyframe for OpenDuck');
+      console.log('Applied home keyframe for OpenDuck (qpos, qvel=0, ctrl)');
     }
 
     // Set camera for OpenDuck

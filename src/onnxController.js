@@ -31,7 +31,8 @@ export class OnnxController {
     this.defaultActuator = null;
 
     // Commands [lin_vel_x, lin_vel_y, ang_vel, neck_pitch, head_pitch, head_yaw, head_roll]
-    this.commands = [0, 0, 0, 0, 0, 0, 0];
+    // Default forward walking command like test_walk.py
+    this.commands = [0.15, 0, 0, 0, 0, 0, 0];
 
     // Imitation phase
     this.imitationI = 0;
@@ -82,27 +83,37 @@ export class OnnxController {
     this.prevMotorTargets = new Float32Array(n);
     this.defaultActuator = new Float32Array(n);
 
-    // Get default actuator positions from keyframe "home"
-    // These values are from scene_flat_terrain.xml keyframe
-    const homeCtrl = [
-      0.002,   // left_hip_yaw
-      0.053,   // left_hip_roll
-      -0.63,   // left_hip_pitch
-      1.368,   // left_knee
-      -0.784,  // left_ankle
-      0,       // neck_pitch
-      0,       // head_pitch
-      0,       // head_yaw
-      0,       // head_roll
-      -0.003,  // right_hip_yaw
-      -0.065,  // right_hip_roll
-      0.635,   // right_hip_pitch
-      1.379,   // right_knee
-      -0.796   // right_ankle
-    ];
+    // Try to get default actuator positions from model keyframe first
+    if (this.model.nkey > 0 && this.model.key_ctrl) {
+      for (let i = 0; i < n; i++) {
+        this.defaultActuator[i] = this.model.key_ctrl[i] || 0;
+      }
+      console.log('Loaded default actuator from model keyframe');
+    } else {
+      // Fallback: hardcoded values from scene_flat_terrain.xml keyframe
+      const homeCtrl = [
+        0.002,   // left_hip_yaw
+        0.053,   // left_hip_roll
+        -0.63,   // left_hip_pitch
+        1.368,   // left_knee
+        -0.784,  // left_ankle
+        0,       // neck_pitch
+        0,       // head_pitch
+        0,       // head_yaw
+        0,       // head_roll
+        -0.003,  // right_hip_yaw
+        -0.065,  // right_hip_roll
+        0.635,   // right_hip_pitch
+        1.379,   // right_knee
+        -0.796   // right_ankle
+      ];
+      for (let i = 0; i < n; i++) {
+        this.defaultActuator[i] = homeCtrl[i] || 0;
+      }
+      console.log('Using hardcoded default actuator values');
+    }
 
     for (let i = 0; i < n; i++) {
-      this.defaultActuator[i] = homeCtrl[i] || 0;
       this.motorTargets[i] = this.defaultActuator[i];
       this.prevMotorTargets[i] = this.defaultActuator[i];
     }
@@ -111,25 +122,72 @@ export class OnnxController {
   }
 
   findSensorAddresses() {
-    // Find gyro and accelerometer sensor addresses
-    // In MuJoCo, sensors are stored in sensordata array
+    // Find gyro and accelerometer sensor addresses by name
+    // Similar to Python: mujoco.mj_name2id(model, mjtObj.mjOBJ_SENSOR, "gyro")
     const nsensor = this.model.nsensor;
+    console.log(`Finding sensor addresses among ${nsensor} sensors`);
 
-    for (let i = 0; i < nsensor; i++) {
-      const adr = this.model.sensor_adr[i];
-      const dim = this.model.sensor_dim[i];
-      // Gyro is typically sensor type 8, accelerometer is type 9
-      const type = this.model.sensor_type[i];
+    // Get sensor names from model.names (Uint8Array of null-terminated strings)
+    const names = this.model.names;
 
-      if (type === 8 && this.gyroAddr < 0) { // mjSENS_GYRO
-        this.gyroAddr = adr;
-        console.log('Found gyro at address:', adr);
+    // Helper to extract string from names array at given address
+    const getNameAt = (nameAdr) => {
+      let name = '';
+      for (let j = nameAdr; j < names.length && names[j] !== 0; j++) {
+        name += String.fromCharCode(names[j]);
       }
-      if (type === 9 && this.accelAddr < 0) { // mjSENS_ACCELEROMETER
+      return name;
+    };
+
+    // Search by name first
+    for (let i = 0; i < nsensor; i++) {
+      const nameAdr = this.model.name_sensoradr[i];
+      const sensorName = getNameAt(nameAdr);
+      const adr = this.model.sensor_adr[i];
+
+      console.log(`Sensor ${i}: name="${sensorName}", adr=${adr}`);
+
+      if (sensorName === 'gyro') {
+        this.gyroAddr = adr;
+        console.log('Found gyro sensor at address:', adr);
+      }
+      if (sensorName === 'accelerometer') {
         this.accelAddr = adr;
-        console.log('Found accelerometer at address:', adr);
+        console.log('Found accelerometer sensor at address:', adr);
       }
     }
+
+    // Fallback: try by sensor type if names not found
+    if (this.gyroAddr < 0 || this.accelAddr < 0) {
+      console.log('Trying fallback by sensor type...');
+      for (let i = 0; i < nsensor; i++) {
+        const adr = this.model.sensor_adr[i];
+        const type = this.model.sensor_type[i];
+
+        // MuJoCo sensor types: mjSENS_GYRO = 8, mjSENS_ACCELEROMETER = 9
+        if (type === 8 && this.gyroAddr < 0) {
+          this.gyroAddr = adr;
+          console.log('Found gyro by type at address:', adr);
+        }
+        if (type === 9 && this.accelAddr < 0) {
+          this.accelAddr = adr;
+          console.log('Found accelerometer by type at address:', adr);
+        }
+      }
+    }
+
+    // Hardcoded fallback based on OpenDuck sensor order:
+    // gyro(0-2), local_linvel(3-5), accelerometer(6-8)
+    if (this.gyroAddr < 0) {
+      this.gyroAddr = 0;
+      console.log('Using hardcoded gyro address: 0');
+    }
+    if (this.accelAddr < 0) {
+      this.accelAddr = 6;
+      console.log('Using hardcoded accelerometer address: 6');
+    }
+
+    console.log('Final sensor addresses - gyro:', this.gyroAddr, 'accel:', this.accelAddr);
   }
 
   setCommand(linX, linY, angZ) {
@@ -345,7 +403,8 @@ export class OnnxController {
 
     this.imitationI = 0;
     this.imitationPhase = [0, 0];
-    this.commands = [0, 0, 0, 0, 0, 0, 0];
+    // Keep default forward walking command
+    this.commands = [0.15, 0, 0, 0, 0, 0, 0];
     this.stepCounter = 0;
     this.pendingAction = null;
 

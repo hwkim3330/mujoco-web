@@ -5,13 +5,13 @@ import { OrbitControls    } from '../node_modules/three/examples/jsm/controls/Or
 import { DragStateManager } from './utils/DragStateManager.js';
 import { setupGUI, downloadExampleScenesFolder, loadSceneFromURL, drawTendonsAndFlex, getPosition, getQuaternion, toMujocoPos, standardNormal } from './mujocoUtils.js';
 import   load_mujoco        from '../node_modules/mujoco-js/dist/mujoco_wasm.js';
+import { OnnxController   } from './onnxController.js';
 
 // Load the MuJoCo Module
 const mujoco = await load_mujoco();
 
 // Set up Emscripten's Virtual File System
-// Use humanoid.xml initially since it's a single file without includes
-// OpenDuck will be available after downloadExampleScenesFolder() completes
+// Use humanoid.xml initially, then switch to OpenDuck after files are downloaded
 var initialScene = "humanoid.xml";
 mujoco.FS.mkdir('/working');
 mujoco.FS.mount(mujoco.MEMFS, { root: '.' }, '/working');
@@ -32,6 +32,11 @@ export class MuJoCoDemo {
     this.tmpVec  = new THREE.Vector3();
     this.tmpQuat = new THREE.Quaternion();
     this.updateGUICallbacks = [];
+
+    // ONNX Controller
+    this.onnxController = null;
+    this.robotCommand = { x: 0, y: 0, rot: 0 };
+    this.keysPressed = {};
 
     this.container = document.createElement( 'div' );
     document.body.appendChild( this.container );
@@ -55,12 +60,12 @@ export class MuJoCoDemo {
     this.spotlight.angle = 1.11;
     this.spotlight.distance = 10000;
     this.spotlight.penumbra = 0.5;
-    this.spotlight.castShadow = true; // default false
+    this.spotlight.castShadow = true;
     this.spotlight.intensity = this.spotlight.intensity * 3.14 * 10.0;
-    this.spotlight.shadow.mapSize.width = 1024; // default
-    this.spotlight.shadow.mapSize.height = 1024; // default
-    this.spotlight.shadow.camera.near = 0.1; // default
-    this.spotlight.shadow.camera.far = 100; // default
+    this.spotlight.shadow.mapSize.width = 1024;
+    this.spotlight.shadow.mapSize.height = 1024;
+    this.spotlight.shadow.camera.near = 0.1;
+    this.spotlight.shadow.camera.far = 100;
     this.spotlight.position.set(0, 3, 3);
     const targetObject = new THREE.Object3D();
     this.scene.add(targetObject);
@@ -69,15 +74,12 @@ export class MuJoCoDemo {
     this.scene.add( this.spotlight );
 
     this.renderer = new THREE.WebGLRenderer( { antialias: true } );
-    this.renderer.setPixelRatio(1.0);////window.devicePixelRatio );
+    this.renderer.setPixelRatio(1.0);
     this.renderer.setSize( window.innerWidth, window.innerHeight );
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap; // default THREE.PCFShadowMap
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     THREE.ColorManagement.enabled = false;
     this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
-    //this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
-    //this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    //this.renderer.toneMappingExposure = 2.0;
     this.renderer.useLegacyLights = true;
 
     this.renderer.setAnimationLoop( this.render.bind(this) );
@@ -95,20 +97,79 @@ export class MuJoCoDemo {
 
     window.addEventListener('resize', this.onWindowResize.bind(this));
 
+    // Keyboard controls for robot
+    this.setupKeyboardControls();
+
     // Initialize the Drag State Manager.
     this.dragStateManager = new DragStateManager(this.scene, this.renderer, this.camera, this.container.parentElement, this.controls);
   }
 
+  setupKeyboardControls() {
+    document.addEventListener('keydown', (e) => {
+      this.keysPressed[e.code] = true;
+      this.updateRobotCommand();
+    });
+    document.addEventListener('keyup', (e) => {
+      this.keysPressed[e.code] = false;
+      this.updateRobotCommand();
+    });
+  }
+
+  updateRobotCommand() {
+    // WASD / Arrow keys for movement
+    let x = 0, y = 0, rot = 0;
+
+    if (this.keysPressed['KeyW'] || this.keysPressed['ArrowUp']) x += 0.15;
+    if (this.keysPressed['KeyS'] || this.keysPressed['ArrowDown']) x -= 0.15;
+    if (this.keysPressed['KeyA'] || this.keysPressed['ArrowLeft']) y += 0.15;
+    if (this.keysPressed['KeyD'] || this.keysPressed['ArrowRight']) y -= 0.15;
+    if (this.keysPressed['KeyQ']) rot += 0.5;
+    if (this.keysPressed['KeyE']) rot -= 0.5;
+
+    this.robotCommand = { x, y, rot };
+
+    if (this.onnxController) {
+      this.onnxController.setCommand(x, y, rot);
+    }
+  }
+
   async init() {
-    // Download the the examples to MuJoCo's virtual file system
+    // Download the examples to MuJoCo's virtual file system
     await downloadExampleScenesFolder(mujoco);
 
-    // Initialize the three.js Scene using the .xml Model in initialScene
+    // Load OpenDuck as default scene after files are ready
+    const defaultScene = "openduck/scene_flat_terrain.xml";
+    this.params.scene = defaultScene;
+
+    // Initialize the three.js Scene using OpenDuck
     [this.model, this.data, this.bodies, this.lights] =
-      await loadSceneFromURL(mujoco, initialScene, this);
+      await loadSceneFromURL(mujoco, defaultScene, this);
+
+    // Set camera for OpenDuck
+    this.camera.position.set(0.5, 0.4, 0.5);
+    this.controls.target.set(0, 0.15, 0);
+    this.controls.update();
+
+    // Initialize ONNX controller
+    await this.initOnnxController();
 
     this.gui = new GUI();
     setupGUI(this);
+  }
+
+  async initOnnxController() {
+    this.onnxController = new OnnxController(mujoco, this.model, this.data);
+
+    try {
+      const loaded = await this.onnxController.loadModel('./assets/models/openduck_walk.onnx');
+      if (loaded) {
+        console.log('ONNX model loaded successfully');
+        // Enable by default for OpenDuck
+        this.onnxController.enabled = true;
+      }
+    } catch (e) {
+      console.warn('Failed to load ONNX model:', e);
+    }
   }
 
   onWindowResize() {
@@ -125,8 +186,12 @@ export class MuJoCoDemo {
       if (timeMS - this.mujoco_time > 35.0) { this.mujoco_time = timeMS; }
       while (this.mujoco_time < timeMS) {
 
+        // Run ONNX controller if enabled
+        if (this.onnxController && this.onnxController.enabled) {
+          this.onnxController.step(timestep);
+        }
         // Jitter the control state with gaussian random noise
-        if (this.params["ctrlnoisestd"] > 0.0) {
+        else if (this.params["ctrlnoisestd"] > 0.0) {
           let rate  = Math.exp(-timestep / Math.max(1e-10, this.params["ctrlnoiserate"]));
           let scale = this.params["ctrlnoisestd"] * Math.sqrt(1 - rate * rate);
           let currentCtrl = this.data.ctrl;
@@ -148,12 +213,10 @@ export class MuJoCoDemo {
             }
           }
           let bodyID = dragged.bodyID;
-          this.dragStateManager.update(); // Update the world-space force origin
+          this.dragStateManager.update();
           let force = toMujocoPos(this.dragStateManager.currentWorld.clone().sub(this.dragStateManager.worldHit).multiplyScalar(this.model.body_mass[bodyID] * 250));
           let point = toMujocoPos(this.dragStateManager.worldHit.clone());
           mujoco.mj_applyFT(this.model, this.data, [force.x, force.y, force.z], [0, 0, 0], [point.x, point.y, point.z], bodyID, this.data.qfrc_applied);
-
-          // TODO: Apply pose perturbations (mocap bodies only).
         }
 
         mujoco.mj_step(this.model, this.data);
@@ -162,17 +225,16 @@ export class MuJoCoDemo {
       }
 
     } else if (this.params["paused"]) {
-      this.dragStateManager.update(); // Update the world-space force origin
+      this.dragStateManager.update();
       let dragged = this.dragStateManager.physicsObject;
       if (dragged && dragged.bodyID) {
         let b = dragged.bodyID;
-        getPosition  (this.data.xpos , b, this.tmpVec , false); // Get raw coordinate from MuJoCo
-        getQuaternion(this.data.xquat, b, this.tmpQuat, false); // Get raw coordinate from MuJoCo
+        getPosition  (this.data.xpos , b, this.tmpVec , false);
+        getQuaternion(this.data.xquat, b, this.tmpQuat, false);
 
         let offset = toMujocoPos(this.dragStateManager.currentWorld.clone()
           .sub(this.dragStateManager.worldHit).multiplyScalar(0.3));
         if (this.model.body_mocapid[b] >= 0) {
-          // Set the root body's mocap position...
           console.log("Trying to move mocap body", b);
           let addr = this.model.body_mocapid[b] * 3;
           let pos  = this.data.mocap_pos;
@@ -180,7 +242,6 @@ export class MuJoCoDemo {
           pos[addr+1] += offset.y;
           pos[addr+2] += offset.z;
         } else {
-          // Set the root body's position directly...
           let root = this.model.body_rootid[b];
           let addr = this.model.jnt_qposadr[this.model.body_jntadr[root]];
           let pos  = this.data.qpos;

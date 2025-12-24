@@ -43,9 +43,19 @@ export class OnnxController {
 
       this.session = await ort.InferenceSession.create(url);
       console.log('ONNX model loaded:', url);
+      console.log('Input names:', this.session.inputNames);
+      console.log('Output names:', this.session.outputNames);
+
+      // Store input/output names
+      this.inputName = this.session.inputNames[0];
+      this.outputName = this.session.outputNames[0];
 
       // Initialize default actuator positions
       this.initDefaultActuator();
+
+      // For synchronous step
+      this.pendingAction = null;
+      this.inferenceRunning = false;
 
       return true;
     } catch (e) {
@@ -157,40 +167,59 @@ export class OnnxController {
     return [0.0, 0.0];
   }
 
-  async step(timestep) {
+  step(timestep) {
     if (!this.session || !this.enabled) {
       return;
     }
 
-    try {
-      // Update phase
-      this.imitationI = (this.imitationI + 1) % this.nbStepsInPeriod;
-      const phase = (this.imitationI / this.nbStepsInPeriod) * 2 * Math.PI;
-      this.imitationPhase[0] = Math.cos(phase);
-      this.imitationPhase[1] = Math.sin(phase);
-
-      // Get observation
-      const obs = this.getObservation();
-
-      // Run inference
-      const inputTensor = new ort.Tensor('float32', obs, [1, obs.length]);
-      const feeds = { obs: inputTensor };
-      const results = await this.session.run(feeds);
-
-      // Get action
-      const action = results.output ? results.output.data : new Float32Array(14);
-
+    // Apply pending action from previous inference
+    if (this.pendingAction) {
       // Update action history
       this.lastLastLastAction.set(this.lastLastAction);
       this.lastLastAction.set(this.lastAction);
-      this.lastAction.set(action);
+      this.lastAction.set(this.pendingAction);
 
       // Apply action to motors
-      this.applyAction(action, timestep);
+      this.applyAction(this.pendingAction, timestep);
+      this.pendingAction = null;
+    }
 
+    // Update phase
+    this.imitationI = (this.imitationI + 1) % this.nbStepsInPeriod;
+    const phase = (this.imitationI / this.nbStepsInPeriod) * 2 * Math.PI;
+    this.imitationPhase[0] = Math.cos(phase);
+    this.imitationPhase[1] = Math.sin(phase);
+
+    // Start new inference if not already running
+    if (!this.inferenceRunning) {
+      this.runInference();
+    }
+  }
+
+  async runInference() {
+    if (this.inferenceRunning) return;
+    this.inferenceRunning = true;
+
+    try {
+      // Get observation
+      const obs = this.getObservation();
+
+      // Run inference with dynamic input name
+      const inputTensor = new ort.Tensor('float32', obs, [1, obs.length]);
+      const feeds = {};
+      feeds[this.inputName] = inputTensor;
+      const results = await this.session.run(feeds);
+
+      // Get action with dynamic output name
+      const output = results[this.outputName];
+      if (output) {
+        this.pendingAction = new Float32Array(output.data);
+      }
     } catch (e) {
       console.error('ONNX inference error:', e);
     }
+
+    this.inferenceRunning = false;
   }
 
   applyAction(action, timestep) {

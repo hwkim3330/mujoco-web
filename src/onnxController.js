@@ -382,7 +382,8 @@ export class OnnxController {
   }
 
   async runFirstInference() {
-    // Run initial inference synchronously so we have an action ready
+    // Run initial inference synchronously so we have an action ready for first decimation step
+    // Note: We do NOT apply it immediately - Python also waits until first decimation step
     console.log('Running initial inference...');
     try {
       const obs = this.getObservation();
@@ -397,19 +398,8 @@ export class OnnxController {
 
       if (output) {
         this.pendingAction = new Float32Array(output.data);
-        console.log('Initial action ready:', this.pendingAction.slice(0, 5));
-
-        // Apply initial action to motor targets immediately
-        for (let i = 0; i < this.numDofs; i++) {
-          this.motorTargets[i] = this.defaultActuator[i] + this.pendingAction[i] * this.actionScale;
-          this.prevMotorTargets[i] = this.motorTargets[i];
-        }
-
-        // Apply to ctrl
-        for (let i = 0; i < this.numDofs; i++) {
-          this.data.ctrl[i] = this.motorTargets[i];
-        }
-        console.log('Initial motor targets applied');
+        console.log('Initial action ready (will apply at first decimation):', this.pendingAction.slice(0, 5));
+        // Don't apply immediately - let step() handle it at first decimation step
       }
     } catch (e) {
       console.error('Initial inference error:', e);

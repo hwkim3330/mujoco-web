@@ -188,8 +188,9 @@ export class MuJoCoDemo {
       const loaded = await this.onnxController.loadModel('./assets/models/openduck_walk.onnx');
       if (loaded) {
         console.log('ONNX model loaded successfully');
-        // Enable by default for OpenDuck
-        this.onnxController.enabled = true;
+        // DISABLED for testing - check if robot can stand with just keyframe
+        this.onnxController.enabled = false;
+        console.log('ONNX controller DISABLED for physics test');
       }
     } catch (e) {
       console.warn('Failed to load ONNX model:', e);

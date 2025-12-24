@@ -8,6 +8,34 @@ export async function reloadFunc() {
   [this.model, this.data, this.bodies, this.lights] =
     await loadSceneFromURL(this.mujoco, this.params.scene, this);
   this.mujoco.mj_forward(this.model, this.data);
+
+  // Apply home keyframe for OpenDuck
+  if (this.params.scene.includes('openduck') && this.model.nkey > 0) {
+    const nq = this.model.nq;
+    const nu = this.model.nu;
+    // Load keyframe 0 (home) qpos and ctrl
+    this.data.qpos.set(this.model.key_qpos.slice(0, nq));
+    if (this.model.key_ctrl) {
+      this.data.ctrl.set(this.model.key_ctrl.slice(0, nu));
+    }
+    this.mujoco.mj_forward(this.model, this.data);
+    console.log('Applied home keyframe for OpenDuck');
+  }
+
+  // Reinitialize ONNX controller with new model/data if loading OpenDuck
+  if (this.onnxController && this.params.scene.includes('openduck')) {
+    this.onnxController.model = this.model;
+    this.onnxController.data = this.data;
+    this.onnxController.numDofs = this.model.nu;
+    this.onnxController.initState();
+    this.onnxController.findSensorAddresses();
+    this.onnxController.reset();
+    this.onnxController.enabled = true;
+    console.log('ONNX controller reinitialized for OpenDuck scene');
+  } else if (this.onnxController) {
+    this.onnxController.enabled = false;
+  }
+
   for (let i = 0; i < this.updateGUICallbacks.length; i++) {
     this.updateGUICallbacks[i](this.model, this.data, this.params);
   }

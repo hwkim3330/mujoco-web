@@ -82,15 +82,32 @@ export class OnnxController {
     this.prevMotorTargets = new Float32Array(n);
     this.defaultActuator = new Float32Array(n);
 
-    // Get default actuator positions from keyframe "home" or zeros
-    // In MuJoCo WASM, we need to get this from the model
+    // Get default actuator positions from keyframe "home"
+    // These values are from scene_flat_terrain.xml keyframe
+    const homeCtrl = [
+      0.002,   // left_hip_yaw
+      0.053,   // left_hip_roll
+      -0.63,   // left_hip_pitch
+      1.368,   // left_knee
+      -0.784,  // left_ankle
+      0,       // neck_pitch
+      0,       // head_pitch
+      0,       // head_yaw
+      0,       // head_roll
+      -0.003,  // right_hip_yaw
+      -0.065,  // right_hip_roll
+      0.635,   // right_hip_pitch
+      1.379,   // right_knee
+      -0.796   // right_ankle
+    ];
+
     for (let i = 0; i < n; i++) {
-      this.defaultActuator[i] = 0;
-      this.motorTargets[i] = 0;
-      this.prevMotorTargets[i] = 0;
+      this.defaultActuator[i] = homeCtrl[i] || 0;
+      this.motorTargets[i] = this.defaultActuator[i];
+      this.prevMotorTargets[i] = this.defaultActuator[i];
     }
 
-    console.log(`Initialized with ${n} actuators`);
+    console.log(`Initialized with ${n} actuators, defaultActuator:`, Array.from(this.defaultActuator));
   }
 
   findSensorAddresses() {
@@ -294,6 +311,11 @@ export class OnnxController {
     try {
       const obs = this.getObservation();
 
+      // Debug: log observation size and sample values
+      if (this.stepCounter <= 20) {
+        console.log(`Step ${this.stepCounter}: obs size=${obs.length}, gyro=[${obs[0].toFixed(3)}, ${obs[1].toFixed(3)}, ${obs[2].toFixed(3)}]`);
+      }
+
       // Run ONNX inference
       const inputTensor = new ort.Tensor('float32', obs, [1, obs.length]);
       const feeds = {};
@@ -304,6 +326,10 @@ export class OnnxController {
 
       if (output) {
         this.pendingAction = new Float32Array(output.data);
+        // Debug: log action
+        if (this.stepCounter <= 20) {
+          console.log(`Action: [${this.pendingAction.slice(0, 5).map(v => v.toFixed(3)).join(', ')}...]`);
+        }
       }
     } catch (e) {
       console.error('ONNX inference error:', e);

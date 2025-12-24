@@ -62,6 +62,9 @@
       <body name="trunk_assembly" pos="0 0 0.0" quat="1 0 0 0" childclass="open_duck_mini_v2">
         <inertial pos="-0.0483259 -9.97823e-05 0.0384971" mass="0.698526"
           fullinertia="0.00167701 0.00344479 0.00292635 -1.31662e-05 -3.24953e-05 -2.15581e-06"/>
+        <!-- Collision geom for trunk body -->
+        <geom name="trunk_collision" type="box" size="0.06 0.04 0.05" pos="-0.04 0 0.045"
+          contype="1" conaffinity="1" group="3"/>
         <!-- Part body_front -->
         <geom type="mesh" class="visual" pos="-0.019 0 0.0648909" quat="1 0 0 0" mesh="body_front"
           material="body_front_material"/>
@@ -266,6 +269,9 @@
                 <joint name="head_roll" type="hinge" range="-0.523598775598218 0.5235987755983796" class="sts3215"/>
                 <inertial pos="0.00815416 -0.00390754 0.0227726" mass="0.406607"
                   fullinertia="0.00244627 0.0016864 0.00108002 -2.02404e-06 9.2382e-05 -1.84944e-05"/>
+                <!-- Collision geom for head -->
+                <geom name="head_collision" type="sphere" size="0.04" pos="0.02 0 0.03"
+                  contype="1" conaffinity="1" group="3"/>
                 <!-- Part right_antenna_holder -->
                 <geom type="mesh" class="visual" pos="-0.12906 -2.4549e-16 0.06095"
                   quat="0.707107 5.22659e-16 0.707107 3.88578e-15" mesh="right_antenna_holder"

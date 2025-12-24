@@ -145,6 +145,18 @@ export class MuJoCoDemo {
     [this.model, this.data, this.bodies, this.lights] =
       await loadSceneFromURL(mujoco, defaultScene, this);
 
+    // Apply home keyframe for OpenDuck
+    if (this.model.nkey > 0) {
+      const nq = this.model.nq;
+      const nu = this.model.nu;
+      this.data.qpos.set(this.model.key_qpos.slice(0, nq));
+      if (this.model.key_ctrl) {
+        this.data.ctrl.set(this.model.key_ctrl.slice(0, nu));
+      }
+      mujoco.mj_forward(this.model, this.data);
+      console.log('Applied home keyframe for OpenDuck');
+    }
+
     // Set camera for OpenDuck
     this.camera.position.set(0.5, 0.4, 0.5);
     this.controls.target.set(0, 0.15, 0);

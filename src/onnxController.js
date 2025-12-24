@@ -126,12 +126,18 @@ export class OnnxController {
     // Similar to Python: mujoco.mj_name2id(model, mjtObj.mjOBJ_SENSOR, "gyro")
     const nsensor = this.model.nsensor;
     console.log(`Finding sensor addresses among ${nsensor} sensors`);
+    console.log('model.names type:', typeof this.model.names, 'length:', this.model.names?.length);
+    console.log('model.name_sensoradr:', this.model.name_sensoradr);
+    console.log('model.sensor_adr:', this.model.sensor_adr);
 
     // Get sensor names from model.names (Uint8Array of null-terminated strings)
     const names = this.model.names;
 
     // Helper to extract string from names array at given address
     const getNameAt = (nameAdr) => {
+      if (!names || nameAdr < 0 || nameAdr >= names.length) {
+        return '';
+      }
       let name = '';
       for (let j = nameAdr; j < names.length && names[j] !== 0; j++) {
         name += String.fromCharCode(names[j]);
@@ -140,21 +146,25 @@ export class OnnxController {
     };
 
     // Search by name first
-    for (let i = 0; i < nsensor; i++) {
-      const nameAdr = this.model.name_sensoradr[i];
-      const sensorName = getNameAt(nameAdr);
-      const adr = this.model.sensor_adr[i];
+    if (names && this.model.name_sensoradr) {
+      for (let i = 0; i < nsensor; i++) {
+        const nameAdr = this.model.name_sensoradr[i];
+        const sensorName = getNameAt(nameAdr);
+        const adr = this.model.sensor_adr[i];
 
-      console.log(`Sensor ${i}: name="${sensorName}", adr=${adr}`);
+        console.log(`Sensor ${i}: nameAdr=${nameAdr}, name="${sensorName}", adr=${adr}`);
 
-      if (sensorName === 'gyro') {
-        this.gyroAddr = adr;
-        console.log('Found gyro sensor at address:', adr);
+        if (sensorName === 'gyro') {
+          this.gyroAddr = adr;
+          console.log('Found gyro sensor at address:', adr);
+        }
+        if (sensorName === 'accelerometer') {
+          this.accelAddr = adr;
+          console.log('Found accelerometer sensor at address:', adr);
+        }
       }
-      if (sensorName === 'accelerometer') {
-        this.accelAddr = adr;
-        console.log('Found accelerometer sensor at address:', adr);
-      }
+    } else {
+      console.warn('model.names or model.name_sensoradr not available');
     }
 
     // Fallback: try by sensor type if names not found
@@ -163,6 +173,8 @@ export class OnnxController {
       for (let i = 0; i < nsensor; i++) {
         const adr = this.model.sensor_adr[i];
         const type = this.model.sensor_type[i];
+
+        console.log(`Sensor ${i}: type=${type}, adr=${adr}`);
 
         // MuJoCo sensor types: mjSENS_GYRO = 8, mjSENS_ACCELEROMETER = 9
         if (type === 8 && this.gyroAddr < 0) {
@@ -188,6 +200,10 @@ export class OnnxController {
     }
 
     console.log('Final sensor addresses - gyro:', this.gyroAddr, 'accel:', this.accelAddr);
+
+    // Debug: check initial sensor data
+    console.log('Initial sensordata sample:',
+      Array.from(this.data.sensordata.slice(0, 10)).map(v => v.toFixed(4)));
   }
 
   setCommand(linX, linY, angZ) {
@@ -370,8 +386,18 @@ export class OnnxController {
       const obs = this.getObservation();
 
       // Debug: log observation size and sample values
-      if (this.stepCounter <= 20) {
-        console.log(`Step ${this.stepCounter}: obs size=${obs.length}, gyro=[${obs[0].toFixed(3)}, ${obs[1].toFixed(3)}, ${obs[2].toFixed(3)}]`);
+      if (this.stepCounter <= 30) {
+        const gyro = [obs[0], obs[1], obs[2]];
+        const accel = [obs[3], obs[4], obs[5]];
+        const cmd = [obs[6], obs[7], obs[8]];
+        const height = this.data.qpos[2];
+        console.log(`Step ${this.stepCounter}: h=${height.toFixed(3)}, gyro=[${gyro.map(v=>v.toFixed(3)).join(',')}], accel=[${accel.map(v=>v.toFixed(3)).join(',')}], cmd=[${cmd.map(v=>v.toFixed(2)).join(',')}]`);
+
+        // Check for NaN or undefined
+        const hasNaN = obs.some(v => isNaN(v) || v === undefined);
+        if (hasNaN) {
+          console.error('Observation contains NaN or undefined!', obs);
+        }
       }
 
       // Run ONNX inference

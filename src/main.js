@@ -13,6 +13,8 @@ const mujoco = await load_mujoco();
 var initialScene = "openduck/scene_flat_terrain.xml";
 mujoco.FS.mkdir('/working');
 mujoco.FS.mount(mujoco.MEMFS, { root: '.' }, '/working');
+// Create subdirectory for openduck scenes
+mujoco.FS.mkdir('/working/openduck');
 mujoco.FS.writeFile("/working/" + initialScene, await(await fetch("./assets/scenes/" + initialScene)).text());
 
 export class MuJoCoDemo {

@@ -1,6 +1,6 @@
 /**
  * ONNX-based Robot Controller for OpenDuck Mini
- * Loads trained policy and controls the robot based on observations
+ * Ported from Open_Duck_Playground/playground/open_duck_mini_v2/mujoco_infer.py
  */
 
 export class OnnxController {
@@ -11,33 +11,47 @@ export class OnnxController {
     this.session = null;
     this.enabled = false;
 
-    // Action parameters
+    // Params from Playground config
     this.actionScale = 0.25;
-    this.maxMotorVelocity = 5.24;
     this.dofVelScale = 0.05;
+    this.maxMotorVelocity = 5.24; // rad/s
+    this.simDt = 0.002;
+    this.decimation = 10;
+    this.ctrlDt = this.simDt * this.decimation; // 0.02
+
+    // Number of actuators (10 for legs only, 14 for full model)
+    this.numDofs = this.model.nu;
 
     // State
-    this.lastAction = new Float32Array(14);
-    this.lastLastAction = new Float32Array(14);
-    this.lastLastLastAction = new Float32Array(14);
+    this.lastAction = null;
+    this.lastLastAction = null;
+    this.lastLastLastAction = null;
     this.motorTargets = null;
     this.prevMotorTargets = null;
-    this.imitationPhase = [0, 0];
-    this.imitationI = 0;
-    this.nbStepsInPeriod = 50; // Approximate from walking gait
+    this.defaultActuator = null;
 
-    // Commands [lin_x, lin_y, ang_z, height, step_freq, phase_offset, swing_height]
+    // Commands [lin_vel_x, lin_vel_y, ang_vel, neck_pitch, head_pitch, head_yaw, head_roll]
     this.commands = [0, 0, 0, 0, 0, 0, 0];
 
-    // Default actuator positions (from config)
-    this.defaultActuator = null;
+    // Imitation phase
+    this.imitationI = 0;
+    this.nbStepsInPeriod = 50; // From PolyReferenceMotion
+    this.imitationPhase = [0, 0];
+
+    // For async inference
+    this.pendingAction = null;
+    this.inferenceRunning = false;
+    this.stepCounter = 0;
+
+    // Sensor addresses (will be set after model loads)
+    this.gyroAddr = -1;
+    this.accelAddr = -1;
   }
 
   async loadModel(url) {
     try {
-      // Use ONNX Runtime Web
       if (typeof ort === 'undefined') {
-        console.warn('ONNX Runtime not loaded. Add ort.min.js to use ONNX inference.');
+        console.warn('ONNX Runtime not loaded.');
         return false;
       }
 
@@ -46,16 +60,11 @@ export class OnnxController {
       console.log('Input names:', this.session.inputNames);
       console.log('Output names:', this.session.outputNames);
 
-      // Store input/output names
       this.inputName = this.session.inputNames[0];
       this.outputName = this.session.outputNames[0];
 
-      // Initialize default actuator positions
-      this.initDefaultActuator();
-
-      // For synchronous step
-      this.pendingAction = null;
-      this.inferenceRunning = false;
+      this.initState();
+      this.findSensorAddresses();
 
       return true;
     } catch (e) {
@@ -64,113 +73,182 @@ export class OnnxController {
     }
   }
 
-  initDefaultActuator() {
-    // Get default positions from model keyframe or zeros
-    const numActuators = this.model.nu;
-    this.defaultActuator = new Float32Array(numActuators);
-    this.motorTargets = new Float32Array(numActuators);
-    this.prevMotorTargets = new Float32Array(numActuators);
+  initState() {
+    const n = this.numDofs;
+    this.lastAction = new Float32Array(n);
+    this.lastLastAction = new Float32Array(n);
+    this.lastLastLastAction = new Float32Array(n);
+    this.motorTargets = new Float32Array(n);
+    this.prevMotorTargets = new Float32Array(n);
+    this.defaultActuator = new Float32Array(n);
 
-    // Try to get from keyframe "home"
-    // For now, use zeros
-    for (let i = 0; i < numActuators; i++) {
+    // Get default actuator positions from keyframe "home" or zeros
+    // In MuJoCo WASM, we need to get this from the model
+    for (let i = 0; i < n; i++) {
       this.defaultActuator[i] = 0;
       this.motorTargets[i] = 0;
       this.prevMotorTargets[i] = 0;
     }
+
+    console.log(`Initialized with ${n} actuators`);
+  }
+
+  findSensorAddresses() {
+    // Find gyro and accelerometer sensor addresses
+    // In MuJoCo, sensors are stored in sensordata array
+    const nsensor = this.model.nsensor;
+
+    for (let i = 0; i < nsensor; i++) {
+      const adr = this.model.sensor_adr[i];
+      const dim = this.model.sensor_dim[i];
+      // Gyro is typically sensor type 8, accelerometer is type 9
+      const type = this.model.sensor_type[i];
+
+      if (type === 8 && this.gyroAddr < 0) { // mjSENS_GYRO
+        this.gyroAddr = adr;
+        console.log('Found gyro at address:', adr);
+      }
+      if (type === 9 && this.accelAddr < 0) { // mjSENS_ACCELEROMETER
+        this.accelAddr = adr;
+        console.log('Found accelerometer at address:', adr);
+      }
+    }
   }
 
   setCommand(linX, linY, angZ) {
+    // Clamp to valid ranges from Playground config
     this.commands[0] = Math.max(-0.15, Math.min(0.15, linX));
     this.commands[1] = Math.max(-0.2, Math.min(0.2, linY));
     this.commands[2] = Math.max(-1.0, Math.min(1.0, angZ));
+    // Head commands (3-6) left at 0 for now
   }
 
-  getObservation() {
-    // Build observation vector (101 dimensions)
-    const obs = [];
-
-    // Gyro (3) - from sensor
-    const gyro = this.getSensorData('gyro', 3);
-    obs.push(...gyro);
-
-    // Accelerometer (3) - with gravity compensation
-    const accel = this.getSensorData('accelerometer', 3);
-    accel[0] += 1.3; // Gravity compensation
-    obs.push(...accel);
-
-    // Commands (7)
-    obs.push(...this.commands);
-
-    // Joint angles - default (14)
-    const jointAngles = this.getJointAngles();
-    for (let i = 0; i < 14; i++) {
-      obs.push((jointAngles[i] || 0) - (this.defaultActuator[i] || 0));
+  getGyro() {
+    if (this.gyroAddr >= 0) {
+      return [
+        this.data.sensordata[this.gyroAddr],
+        this.data.sensordata[this.gyroAddr + 1],
+        this.data.sensordata[this.gyroAddr + 2]
+      ];
     }
+    return [0, 0, 0];
+  }
 
-    // Joint velocities (14)
-    const jointVel = this.getJointVelocities();
-    for (let i = 0; i < 14; i++) {
-      obs.push((jointVel[i] || 0) * this.dofVelScale);
+  getAccelerometer() {
+    if (this.accelAddr >= 0) {
+      const ax = this.data.sensordata[this.accelAddr] + 1.3; // Gravity compensation
+      const ay = this.data.sensordata[this.accelAddr + 1];
+      const az = this.data.sensordata[this.accelAddr + 2];
+      return [ax, ay, az];
     }
-
-    // Action history (14 * 3 = 42)
-    obs.push(...this.lastAction);
-    obs.push(...this.lastLastAction);
-    obs.push(...this.lastLastLastAction);
-
-    // Motor targets (14)
-    obs.push(...(this.motorTargets || new Float32Array(14)));
-
-    // Foot contacts (2)
-    const contacts = this.getFootContacts();
-    obs.push(...contacts);
-
-    // Phase (2)
-    obs.push(...this.imitationPhase);
-
-    return new Float32Array(obs);
+    return [1.3, 0, 0]; // Default with gravity compensation
   }
 
-  getSensorData(name, size) {
-    // For now, return placeholder
-    // In real implementation, read from MuJoCo sensors
-    return new Float32Array(size);
-  }
-
-  getJointAngles() {
-    const angles = new Float32Array(14);
+  getActuatorJointsQpos() {
+    // Get joint positions for actuated joints
+    // Skip first 7 (floating base: 3 pos + 4 quat)
+    const angles = new Float32Array(this.numDofs);
     const qpos = this.data.qpos;
-    // Skip first 7 (base position + quaternion)
-    for (let i = 0; i < Math.min(14, qpos.length - 7); i++) {
+    for (let i = 0; i < this.numDofs; i++) {
       angles[i] = qpos[7 + i] || 0;
     }
     return angles;
   }
 
-  getJointVelocities() {
-    const velocities = new Float32Array(14);
+  getActuatorJointsQvel() {
+    // Get joint velocities for actuated joints
+    // Skip first 6 (floating base: 3 linear + 3 angular vel)
+    const vels = new Float32Array(this.numDofs);
     const qvel = this.data.qvel;
-    // Skip first 6 (base linear + angular velocity)
-    for (let i = 0; i < Math.min(14, qvel.length - 6); i++) {
-      velocities[i] = qvel[6 + i] || 0;
+    for (let i = 0; i < this.numDofs; i++) {
+      vels[i] = qvel[6 + i] || 0;
     }
-    return velocities;
+    return vels;
   }
 
-  getFootContacts() {
+  getFeetContacts() {
     // Simple height-based contact detection
+    // TODO: Implement proper geom collision check
     const height = this.data.qpos[2] || 0;
-    if (height < 0.15) {
+    if (height < 0.18) {
       return [1.0, 1.0];
     }
     return [0.0, 0.0];
+  }
+
+  getObservation() {
+    // Build observation exactly as in mujoco_infer.py get_obs()
+    const obs = [];
+
+    // Gyro (3)
+    const gyro = this.getGyro();
+    obs.push(...gyro);
+
+    // Accelerometer (3) with gravity compensation
+    const accel = this.getAccelerometer();
+    obs.push(...accel);
+
+    // Commands (7)
+    obs.push(...this.commands);
+
+    // Joint angles - default (numDofs)
+    const jointAngles = this.getActuatorJointsQpos();
+    for (let i = 0; i < this.numDofs; i++) {
+      obs.push(jointAngles[i] - this.defaultActuator[i]);
+    }
+
+    // Joint velocities * dof_vel_scale (numDofs)
+    const jointVel = this.getActuatorJointsQvel();
+    for (let i = 0; i < this.numDofs; i++) {
+      obs.push(jointVel[i] * this.dofVelScale);
+    }
+
+    // Last action (numDofs)
+    obs.push(...this.lastAction);
+
+    // Last last action (numDofs)
+    obs.push(...this.lastLastAction);
+
+    // Last last last action (numDofs)
+    obs.push(...this.lastLastLastAction);
+
+    // Motor targets (numDofs)
+    obs.push(...this.motorTargets);
+
+    // Foot contacts (2)
+    const contacts = this.getFeetContacts();
+    obs.push(...contacts);
+
+    // Imitation phase (2)
+    obs.push(...this.imitationPhase);
+
+    return new Float32Array(obs);
   }
 
   step(timestep) {
     if (!this.session || !this.enabled) {
       return;
     }
+
+    this.stepCounter++;
+
+    // Only run policy at control frequency (every decimation steps)
+    if (this.stepCounter % this.decimation !== 0) {
+      // Still apply motor targets
+      if (this.motorTargets) {
+        const ctrl = this.data.ctrl;
+        for (let i = 0; i < Math.min(this.numDofs, ctrl.length); i++) {
+          ctrl[i] = this.motorTargets[i];
+        }
+      }
+      return;
+    }
+
+    // Update imitation phase
+    this.imitationI = (this.imitationI + 1) % this.nbStepsInPeriod;
+    const phase = (this.imitationI / this.nbStepsInPeriod) * 2 * Math.PI;
+    this.imitationPhase[0] = Math.cos(phase);
+    this.imitationPhase[1] = Math.sin(phase);
 
     // Apply pending action from previous inference
     if (this.pendingAction) {
@@ -179,18 +257,31 @@ export class OnnxController {
       this.lastLastAction.set(this.lastAction);
       this.lastAction.set(this.pendingAction);
 
-      // Apply action to motors
-      this.applyAction(this.pendingAction, timestep);
+      // Compute motor targets
+      for (let i = 0; i < this.numDofs; i++) {
+        this.motorTargets[i] = this.defaultActuator[i] + this.pendingAction[i] * this.actionScale;
+      }
+
+      // Apply velocity limits
+      for (let i = 0; i < this.numDofs; i++) {
+        const maxChange = this.maxMotorVelocity * this.ctrlDt;
+        const diff = this.motorTargets[i] - this.prevMotorTargets[i];
+        if (Math.abs(diff) > maxChange) {
+          this.motorTargets[i] = this.prevMotorTargets[i] + Math.sign(diff) * maxChange;
+        }
+        this.prevMotorTargets[i] = this.motorTargets[i];
+      }
+
+      // Apply to MuJoCo
+      const ctrl = this.data.ctrl;
+      for (let i = 0; i < Math.min(this.numDofs, ctrl.length); i++) {
+        ctrl[i] = this.motorTargets[i];
+      }
+
       this.pendingAction = null;
     }
 
-    // Update phase
-    this.imitationI = (this.imitationI + 1) % this.nbStepsInPeriod;
-    const phase = (this.imitationI / this.nbStepsInPeriod) * 2 * Math.PI;
-    this.imitationPhase[0] = Math.cos(phase);
-    this.imitationPhase[1] = Math.sin(phase);
-
-    // Start new inference if not already running
+    // Start new inference
     if (!this.inferenceRunning) {
       this.runInference();
     }
@@ -201,17 +292,16 @@ export class OnnxController {
     this.inferenceRunning = true;
 
     try {
-      // Get observation
       const obs = this.getObservation();
 
-      // Run inference with dynamic input name
+      // Run ONNX inference
       const inputTensor = new ort.Tensor('float32', obs, [1, obs.length]);
       const feeds = {};
       feeds[this.inputName] = inputTensor;
-      const results = await this.session.run(feeds);
 
-      // Get action with dynamic output name
+      const results = await this.session.run(feeds);
       const output = results[this.outputName];
+
       if (output) {
         this.pendingAction = new Float32Array(output.data);
       }
@@ -222,39 +312,18 @@ export class OnnxController {
     this.inferenceRunning = false;
   }
 
-  applyAction(action, timestep) {
-    const numActuators = Math.min(action.length, this.model.nu);
-
-    // Compute target positions
-    for (let i = 0; i < numActuators; i++) {
-      this.motorTargets[i] = this.defaultActuator[i] + action[i] * this.actionScale;
-    }
-
-    // Apply velocity limit
-    const maxChange = this.maxMotorVelocity * timestep;
-    for (let i = 0; i < numActuators; i++) {
-      const diff = this.motorTargets[i] - this.prevMotorTargets[i];
-      if (Math.abs(diff) > maxChange) {
-        this.motorTargets[i] = this.prevMotorTargets[i] + Math.sign(diff) * maxChange;
-      }
-      this.prevMotorTargets[i] = this.motorTargets[i];
-    }
-
-    // Apply to MuJoCo
-    const ctrl = this.data.ctrl;
-    for (let i = 0; i < numActuators; i++) {
-      ctrl[i] = this.motorTargets[i];
-    }
-  }
-
   reset() {
-    this.lastAction.fill(0);
-    this.lastLastAction.fill(0);
-    this.lastLastLastAction.fill(0);
-    this.imitationI = 0;
-    this.commands = [0, 0, 0, 0, 0, 0, 0];
+    if (this.lastAction) this.lastAction.fill(0);
+    if (this.lastLastAction) this.lastLastAction.fill(0);
+    if (this.lastLastLastAction) this.lastLastLastAction.fill(0);
 
-    if (this.motorTargets) {
+    this.imitationI = 0;
+    this.imitationPhase = [0, 0];
+    this.commands = [0, 0, 0, 0, 0, 0, 0];
+    this.stepCounter = 0;
+    this.pendingAction = null;
+
+    if (this.motorTargets && this.defaultActuator) {
       this.motorTargets.set(this.defaultActuator);
       this.prevMotorTargets.set(this.defaultActuator);
     }

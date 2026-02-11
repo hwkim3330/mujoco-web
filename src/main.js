@@ -26,7 +26,7 @@ export class MuJoCoDemo {
     this.data  = new mujoco.MjData(this.model);
 
     // Define Random State Variables
-    this.params = { scene: initialScene, paused: false, help: false, ctrlnoiserate: 0.0, ctrlnoisestd: 0.0, keyframeNumber: 0 };
+    this.params = { scene: initialScene, paused: false, help: false, ctrlnoiserate: 0.0, ctrlnoisestd: 0.0, keyframeNumber: 0, cameraFollow: true };
     this.mujoco_time = 0.0;
     this.bodies  = {}, this.lights = {};
     this.tmpVec  = new THREE.Vector3();
@@ -37,6 +37,7 @@ export class MuJoCoDemo {
     this.onnxController = null;
     this.robotCommand = { x: 0, y: 0, rot: 0 };
     this.keysPressed = {};
+    this.cameraOffset = new THREE.Vector3(0.5, 0.4, 0.5);
 
     this.container = document.createElement( 'div' );
     document.body.appendChild( this.container );
@@ -184,17 +185,31 @@ export class MuJoCoDemo {
   async initOnnxController() {
     this.onnxController = new OnnxController(mujoco, this.model, this.data);
 
+    const statusBar = document.getElementById('status-bar');
     try {
       const loaded = await this.onnxController.loadModel('./assets/models/openduck_walk.onnx');
       if (loaded) {
-        console.log('ONNX model loaded successfully');
-        // DISABLED for testing - check if robot can stand with just keyframe
-        this.onnxController.enabled = false;
-        console.log('ONNX controller DISABLED for physics test');
+        await this.onnxController.runFirstInference();
+        this.onnxController.enabled = true;
+        if (statusBar) statusBar.textContent = 'ONNX: active | WASD to walk';
+        if (statusBar) statusBar.style.color = '#0f0';
       }
     } catch (e) {
       console.warn('Failed to load ONNX model:', e);
+      if (statusBar) { statusBar.textContent = 'ONNX: failed'; statusBar.style.color = '#f00'; }
     }
+
+    // Hide loading screen
+    const loadingScreen = document.getElementById('loading-screen');
+    if (loadingScreen) loadingScreen.classList.add('hidden');
+    setTimeout(() => { if (loadingScreen) loadingScreen.remove(); }, 600);
+
+    // Listen for mobile joystick events
+    window.addEventListener('joystick-move', (e) => {
+      if (this.onnxController) {
+        this.onnxController.setCommand(e.detail.x, e.detail.y, 0);
+      }
+    });
   }
 
   onWindowResize() {
@@ -295,6 +310,15 @@ export class MuJoCoDemo {
         getPosition(this.data.light_xdir, l, this.tmpVec);
         this.lights[l].lookAt(this.tmpVec.add(this.lights[l].position));
       }
+    }
+
+    // Camera follow - track the duck's base body
+    if (this.params.cameraFollow && this.params.scene.includes('openduck')) {
+      const baseX = this.data.qpos[0];
+      const baseY = this.data.qpos[1];
+      const baseZ = this.data.qpos[2];
+      // Update orbit controls target to follow duck (swizzle Y/Z for three.js)
+      this.controls.target.set(baseX, baseZ, -baseY);
     }
 
     // Draw Tendons and Flex verts

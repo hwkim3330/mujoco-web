@@ -1,26 +1,132 @@
 <!DOCTYPE html>
 <html lang="en">
     <head>
-        <title>MuJoCo Demo</title>
+        <title>OpenDuck Mini - RL Walking Demo</title>
         <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
-        <meta name="application-name"   content="mujoco_wasm">
-        <meta name="description"        content="MuJoCo Testbed">
-        <meta name="keywords"           content="MuJoCo">
-        <meta name="author"             content="zalo">
+        <meta name="application-name"   content="openduck_rl">
+        <meta name="description"        content="OpenDuck Mini walking with reinforcement learning in the browser">
+        <meta name="keywords"           content="MuJoCo, OpenDuck, Reinforcement Learning, ONNX">
+        <meta name="author"             content="hwkim3330">
         <meta name="viewport"           content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover, user-scalable=no, shrink-to-fit=0">
-        <meta name="theme-color"        content="#ffffff">
+        <meta name="theme-color"        content="#1a2a3a">
         <link rel ="icon" type="image/x-icon" href="./assets/favicon.png">
+        <style>
+            #controls-overlay {
+                position: fixed;
+                bottom: 20px;
+                left: 20px;
+                z-index: 100;
+                pointer-events: none;
+            }
+            #controls-overlay > * {
+                pointer-events: auto;
+            }
+            .control-hint {
+                background: rgba(0,0,0,0.6);
+                color: #fff;
+                padding: 8px 14px;
+                border-radius: 8px;
+                font: 13px/1.5 monospace;
+                margin-bottom: 8px;
+                backdrop-filter: blur(4px);
+            }
+            #mobile-joystick {
+                display: none;
+                width: 140px;
+                height: 140px;
+                background: rgba(255,255,255,0.15);
+                border: 2px solid rgba(255,255,255,0.3);
+                border-radius: 50%;
+                position: relative;
+                backdrop-filter: blur(4px);
+            }
+            #joystick-knob {
+                width: 50px;
+                height: 50px;
+                background: rgba(255,255,255,0.5);
+                border-radius: 50%;
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+            }
+            #status-bar {
+                position: fixed;
+                top: 10px;
+                left: 50%;
+                transform: translateX(-50%);
+                background: rgba(0,0,0,0.6);
+                color: #0f0;
+                padding: 6px 16px;
+                border-radius: 20px;
+                font: bold 13px monospace;
+                z-index: 100;
+                backdrop-filter: blur(4px);
+            }
+            @media (max-width: 768px) {
+                #mobile-joystick { display: block; }
+                .control-hint { display: none; }
+            }
+            #loading-screen {
+                position: fixed;
+                top: 0; left: 0; right: 0; bottom: 0;
+                background: #1a2a3a;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                z-index: 1000;
+                color: #fff;
+                font-family: monospace;
+                transition: opacity 0.5s;
+            }
+            #loading-screen.hidden {
+                opacity: 0;
+                pointer-events: none;
+            }
+            .loading-spinner {
+                width: 40px;
+                height: 40px;
+                border: 3px solid rgba(255,255,255,0.2);
+                border-top-color: #fff;
+                border-radius: 50%;
+                animation: spin 1s linear infinite;
+                margin-bottom: 16px;
+            }
+            @keyframes spin { to { transform: rotate(360deg); } }
+        </style>
     </head>
 
-    <body style="margin:0px; background-color:rgb(255, 255, 255); overflow:hidden; position:fixed; min-height: 100%;
+    <body style="margin:0px; background-color:rgb(26, 42, 58); overflow:hidden; position:fixed; min-height: 100%;
                  touch-action: none;
-                 -webkit-touch-callout: none; /* iOS Safari */
-                 -webkit-user-select: none; /* Safari */
-                 -khtml-user-select: none; /* Konqueror HTML */
-                 -moz-user-select: none; /* Old versions of Firefox */
-                 -ms-user-select: none; /* Internet Explorer/Edge */
-                 user-select: none; /* Non-prefixed version, currently supported by Chrome, Edge, Opera and Firefox */">
-        <h1 hidden></h1> <!-- Puts the Lighthouse Score over 90 heheh-->
+                 -webkit-touch-callout: none;
+                 -webkit-user-select: none;
+                 -khtml-user-select: none;
+                 -moz-user-select: none;
+                 -ms-user-select: none;
+                 user-select: none;">
+        <h1 hidden></h1>
+
+        <!-- Loading Screen -->
+        <div id="loading-screen">
+            <div class="loading-spinner"></div>
+            <div>Loading MuJoCo + ONNX Model...</div>
+            <div id="loading-status" style="margin-top:8px; font-size:11px; color:#888;">Initializing...</div>
+        </div>
+
+        <!-- Status Bar -->
+        <div id="status-bar">ONNX: loading...</div>
+
+        <!-- Controls Overlay -->
+        <div id="controls-overlay">
+            <div class="control-hint">
+                WASD: Move | Q/E: Rotate<br>
+                Space: Pause | Backspace: Reset
+            </div>
+            <div id="mobile-joystick">
+                <div id="joystick-knob"></div>
+            </div>
+        </div>
 
 		<!-- Import maps polyfill -->
 		<script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
@@ -34,9 +140,55 @@
         </script>
 
         <div id="appbody" style="position: absolute;">
-            <!--<div id="error"></div>
-            <script type="module" src="./src/Debug.js"></script>-->
             <script type="module" src="./src/main.js"></script>
         </div>
+
+        <!-- Mobile Joystick Logic -->
+        <script>
+            document.addEventListener('DOMContentLoaded', () => {
+                const joystick = document.getElementById('mobile-joystick');
+                const knob = document.getElementById('joystick-knob');
+                if (!joystick || !knob) return;
+
+                let touching = false;
+                const maxDist = 45;
+
+                joystick.addEventListener('touchstart', (e) => {
+                    touching = true;
+                    e.preventDefault();
+                });
+
+                joystick.addEventListener('touchmove', (e) => {
+                    if (!touching) return;
+                    e.preventDefault();
+                    const rect = joystick.getBoundingClientRect();
+                    const cx = rect.left + rect.width / 2;
+                    const cy = rect.top + rect.height / 2;
+                    const touch = e.touches[0];
+                    let dx = touch.clientX - cx;
+                    let dy = touch.clientY - cy;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    if (dist > maxDist) {
+                        dx = dx / dist * maxDist;
+                        dy = dy / dist * maxDist;
+                    }
+                    knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+
+                    // Dispatch custom event for the controller
+                    window.dispatchEvent(new CustomEvent('joystick-move', {
+                        detail: { x: -dy / maxDist * 0.15, y: -dx / maxDist * 0.2 }
+                    }));
+                });
+
+                const resetJoystick = () => {
+                    touching = false;
+                    knob.style.transform = 'translate(-50%, -50%)';
+                    window.dispatchEvent(new CustomEvent('joystick-move', { detail: { x: 0, y: 0 } }));
+                };
+
+                joystick.addEventListener('touchend', resetJoystick);
+                joystick.addEventListener('touchcancel', resetJoystick);
+            });
+        </script>
     </body>
 </html>

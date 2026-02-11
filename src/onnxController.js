@@ -11,7 +11,7 @@ export class OnnxController {
     this.session = null;
     this.enabled = false;
 
-    // Params from Playground config
+    // Params from Playground config (must match training)
     this.actionScale = 0.25;
     this.dofVelScale = 0.05;
     this.maxMotorVelocity = 5.24; // rad/s
@@ -19,8 +19,8 @@ export class OnnxController {
     this.decimation = 10;
     this.ctrlDt = this.simDt * this.decimation; // 0.02
 
-    // Number of actuators (10 for legs only, 14 for full model)
-    this.numDofs = this.model.nu;
+    // Number of actuators (14 for full model with head)
+    this.numDofs = 14;
 
     // State
     this.lastAction = null;
@@ -31,22 +31,25 @@ export class OnnxController {
     this.defaultActuator = null;
 
     // Commands [lin_vel_x, lin_vel_y, ang_vel, neck_pitch, head_pitch, head_yaw, head_roll]
-    // Start with zero command (standing still) for testing
     this.commands = [0, 0, 0, 0, 0, 0, 0];
 
     // Imitation phase
     this.imitationI = 0;
-    this.nbStepsInPeriod = 50; // From PolyReferenceMotion
+    this.nbStepsInPeriod = 50;
     this.imitationPhase = [0, 0];
 
-    // For async inference
-    this.pendingAction = null;
-    this.inferenceRunning = false;
+    // Current action (computed synchronously)
+    this.currentAction = null;
     this.stepCounter = 0;
 
-    // Sensor addresses (will be set after model loads)
+    // Sensor addresses
     this.gyroAddr = -1;
     this.accelAddr = -1;
+
+    // Contact geom names for foot detection
+    this.leftFootGeomId = -1;
+    this.rightFootGeomId = -1;
+    this.floorGeomId = -1;
   }
 
   async loadModel(url) {
@@ -58,17 +61,15 @@ export class OnnxController {
 
       this.session = await ort.InferenceSession.create(url);
       console.log('ONNX model loaded:', url);
-      console.log('Input names:', this.session.inputNames);
-      console.log('Output names:', this.session.outputNames);
+      console.log('Input:', this.session.inputNames[0], 'Output:', this.session.outputNames[0]);
 
       this.inputName = this.session.inputNames[0];
       this.outputName = this.session.outputNames[0];
 
+      this.numDofs = this.model.nu;
       this.initState();
       this.findSensorAddresses();
-
-      // Run first inference immediately to have action ready
-      await this.runFirstInference();
+      this.findContactGeoms();
 
       return true;
     } catch (e) {
@@ -85,62 +86,37 @@ export class OnnxController {
     this.motorTargets = new Float32Array(n);
     this.prevMotorTargets = new Float32Array(n);
     this.defaultActuator = new Float32Array(n);
+    this.currentAction = null;
 
-    // Try to get default actuator positions from model keyframe first
+    // Get default actuator positions from model keyframe
     if (this.model.nkey > 0 && this.model.key_ctrl) {
       for (let i = 0; i < n; i++) {
         this.defaultActuator[i] = this.model.key_ctrl[i] || 0;
       }
-      console.log('Loaded default actuator from model keyframe');
     } else {
       // Fallback: hardcoded values from scene_flat_terrain.xml keyframe
       const homeCtrl = [
-        0.002,   // left_hip_yaw
-        0.053,   // left_hip_roll
-        -0.63,   // left_hip_pitch
-        1.368,   // left_knee
-        -0.784,  // left_ankle
-        0,       // neck_pitch
-        0,       // head_pitch
-        0,       // head_yaw
-        0,       // head_roll
-        -0.003,  // right_hip_yaw
-        -0.065,  // right_hip_roll
-        0.635,   // right_hip_pitch
-        1.379,   // right_knee
-        -0.796   // right_ankle
+        0.002, 0.053, -0.63, 1.368, -0.784,
+        0, 0, 0, 0,
+        -0.003, -0.065, 0.635, 1.379, -0.796
       ];
       for (let i = 0; i < n; i++) {
         this.defaultActuator[i] = homeCtrl[i] || 0;
       }
-      console.log('Using hardcoded default actuator values');
     }
 
     for (let i = 0; i < n; i++) {
       this.motorTargets[i] = this.defaultActuator[i];
       this.prevMotorTargets[i] = this.defaultActuator[i];
     }
-
-    console.log(`Initialized with ${n} actuators, defaultActuator:`, Array.from(this.defaultActuator));
   }
 
   findSensorAddresses() {
-    // Find gyro and accelerometer sensor addresses by name
-    // Similar to Python: mujoco.mj_name2id(model, mjtObj.mjOBJ_SENSOR, "gyro")
     const nsensor = this.model.nsensor;
-    console.log(`Finding sensor addresses among ${nsensor} sensors`);
-    console.log('model.names type:', typeof this.model.names, 'length:', this.model.names?.length);
-    console.log('model.name_sensoradr:', this.model.name_sensoradr);
-    console.log('model.sensor_adr:', this.model.sensor_adr);
-
-    // Get sensor names from model.names (Uint8Array of null-terminated strings)
     const names = this.model.names;
 
-    // Helper to extract string from names array at given address
     const getNameAt = (nameAdr) => {
-      if (!names || nameAdr < 0 || nameAdr >= names.length) {
-        return '';
-      }
+      if (!names || nameAdr < 0 || nameAdr >= names.length) return '';
       let name = '';
       for (let j = nameAdr; j < names.length && names[j] !== 0; j++) {
         name += String.fromCharCode(names[j]);
@@ -148,98 +124,82 @@ export class OnnxController {
       return name;
     };
 
-    // Search by name first
+    // Search by name
     if (names && this.model.name_sensoradr) {
       for (let i = 0; i < nsensor; i++) {
         const nameAdr = this.model.name_sensoradr[i];
         const sensorName = getNameAt(nameAdr);
         const adr = this.model.sensor_adr[i];
 
-        console.log(`Sensor ${i}: nameAdr=${nameAdr}, name="${sensorName}", adr=${adr}`);
-
         if (sensorName === 'gyro') {
           this.gyroAddr = adr;
-          console.log('Found gyro sensor at address:', adr);
         }
         if (sensorName === 'accelerometer') {
           this.accelAddr = adr;
-          console.log('Found accelerometer sensor at address:', adr);
         }
       }
-    } else {
-      console.warn('model.names or model.name_sensoradr not available');
     }
 
-    // Fallback: try by sensor type if names not found
+    // Fallback by sensor type (mjSENS_GYRO = 8, mjSENS_ACCELEROMETER = 9)
     if (this.gyroAddr < 0 || this.accelAddr < 0) {
-      console.log('Trying fallback by sensor type...');
       for (let i = 0; i < nsensor; i++) {
-        const adr = this.model.sensor_adr[i];
         const type = this.model.sensor_type[i];
-
-        console.log(`Sensor ${i}: type=${type}, adr=${adr}`);
-
-        // MuJoCo sensor types: mjSENS_GYRO = 8, mjSENS_ACCELEROMETER = 9
-        if (type === 8 && this.gyroAddr < 0) {
-          this.gyroAddr = adr;
-          console.log('Found gyro by type at address:', adr);
-        }
-        if (type === 9 && this.accelAddr < 0) {
-          this.accelAddr = adr;
-          console.log('Found accelerometer by type at address:', adr);
-        }
+        const adr = this.model.sensor_adr[i];
+        if (type === 8 && this.gyroAddr < 0) this.gyroAddr = adr;
+        if (type === 9 && this.accelAddr < 0) this.accelAddr = adr;
       }
     }
 
-    // Hardcoded fallback based on OpenDuck sensor order:
-    // gyro(0-2), local_linvel(3-5), accelerometer(6-8)
-    if (this.gyroAddr < 0) {
-      this.gyroAddr = 0;
-      console.log('Using hardcoded gyro address: 0');
-    }
-    if (this.accelAddr < 0) {
-      this.accelAddr = 6;
-      console.log('Using hardcoded accelerometer address: 6');
-    }
+    // Hardcoded fallback
+    if (this.gyroAddr < 0) this.gyroAddr = 0;
+    if (this.accelAddr < 0) this.accelAddr = 6;
+  }
 
-    console.log('Final sensor addresses - gyro:', this.gyroAddr, 'accel:', this.accelAddr);
+  findContactGeoms() {
+    // Find geom IDs for foot contact detection
+    const names = this.model.names;
+    const getNameAt = (nameAdr) => {
+      if (!names || nameAdr < 0 || nameAdr >= names.length) return '';
+      let name = '';
+      for (let j = nameAdr; j < names.length && names[j] !== 0; j++) {
+        name += String.fromCharCode(names[j]);
+      }
+      return name;
+    };
 
-    // Debug: check initial sensor data
-    console.log('Initial sensordata sample:',
-      Array.from(this.data.sensordata.slice(0, 10)).map(v => v.toFixed(4)));
+    for (let g = 0; g < this.model.ngeom; g++) {
+      if (this.model.name_geomadr) {
+        const nameAdr = this.model.name_geomadr[g];
+        const geomName = getNameAt(nameAdr);
+        if (geomName === 'left_foot_bottom_tpu') this.leftFootGeomId = g;
+        if (geomName === 'right_foot_bottom_tpu') this.rightFootGeomId = g;
+        if (geomName === 'floor') this.floorGeomId = g;
+      }
+    }
   }
 
   setCommand(linX, linY, angZ) {
-    // Clamp to valid ranges from Playground config
     this.commands[0] = Math.max(-0.15, Math.min(0.15, linX));
     this.commands[1] = Math.max(-0.2, Math.min(0.2, linY));
     this.commands[2] = Math.max(-1.0, Math.min(1.0, angZ));
-    // Head commands (3-6) left at 0 for now
   }
 
   getGyro() {
-    if (this.gyroAddr >= 0) {
-      return [
-        this.data.sensordata[this.gyroAddr],
-        this.data.sensordata[this.gyroAddr + 1],
-        this.data.sensordata[this.gyroAddr + 2]
-      ];
-    }
-    return [0, 0, 0];
+    return [
+      this.data.sensordata[this.gyroAddr],
+      this.data.sensordata[this.gyroAddr + 1],
+      this.data.sensordata[this.gyroAddr + 2]
+    ];
   }
 
   getAccelerometer() {
-    if (this.accelAddr >= 0) {
-      const ax = this.data.sensordata[this.accelAddr] + 1.3; // Gravity compensation
-      const ay = this.data.sensordata[this.accelAddr + 1];
-      const az = this.data.sensordata[this.accelAddr + 2];
-      return [ax, ay, az];
-    }
-    return [1.3, 0, 0]; // Default with gravity compensation
+    const ax = this.data.sensordata[this.accelAddr] + 1.3; // Gravity compensation (matches training)
+    const ay = this.data.sensordata[this.accelAddr + 1];
+    const az = this.data.sensordata[this.accelAddr + 2];
+    return [ax, ay, az];
   }
 
   getActuatorJointsQpos() {
-    // Get joint positions for actuated joints
     // Skip first 7 (floating base: 3 pos + 4 quat)
     const angles = new Float32Array(this.numDofs);
     const qpos = this.data.qpos;
@@ -250,7 +210,6 @@ export class OnnxController {
   }
 
   getActuatorJointsQvel() {
-    // Get joint velocities for actuated joints
     // Skip first 6 (floating base: 3 linear + 3 angular vel)
     const vels = new Float32Array(this.numDofs);
     const qvel = this.data.qvel;
@@ -261,13 +220,40 @@ export class OnnxController {
   }
 
   getFeetContacts() {
-    // Simple height-based contact detection
-    // TODO: Implement proper geom collision check
-    const height = this.data.qpos[2] || 0;
-    if (height < 0.18) {
-      return [1.0, 1.0];
+    // Check MuJoCo contact data for foot-floor contacts
+    let leftContact = 0.0;
+    let rightContact = 0.0;
+
+    const ncon = this.data.ncon;
+    for (let c = 0; c < ncon; c++) {
+      // Each contact has geom1 and geom2
+      const geom1 = this.data.contact_geom1 ? this.data.contact_geom1[c] : -1;
+      const geom2 = this.data.contact_geom2 ? this.data.contact_geom2[c] : -1;
+
+      // Check if left foot contacts floor
+      if ((geom1 === this.leftFootGeomId && geom2 === this.floorGeomId) ||
+          (geom2 === this.leftFootGeomId && geom1 === this.floorGeomId)) {
+        leftContact = 1.0;
+      }
+      // Check if right foot contacts floor
+      if ((geom1 === this.rightFootGeomId && geom2 === this.floorGeomId) ||
+          (geom2 === this.rightFootGeomId && geom1 === this.floorGeomId)) {
+        rightContact = 1.0;
+      }
     }
-    return [0.0, 0.0];
+
+    // Fallback: if contact data arrays not available, use body height heuristic
+    if (!this.data.contact_geom1 || !this.data.contact_geom2) {
+      // Use foot site positions from sensordata if available
+      // Otherwise simple height-based detection
+      const height = this.data.qpos[2] || 0;
+      if (height < 0.18) {
+        leftContact = 1.0;
+        rightContact = 1.0;
+      }
+    }
+
+    return [leftContact, rightContact];
   }
 
   getObservation() {
@@ -275,12 +261,10 @@ export class OnnxController {
     const obs = [];
 
     // Gyro (3)
-    const gyro = this.getGyro();
-    obs.push(...gyro);
+    obs.push(...this.getGyro());
 
     // Accelerometer (3) with gravity compensation
-    const accel = this.getAccelerometer();
-    obs.push(...accel);
+    obs.push(...this.getAccelerometer());
 
     // Commands (7)
     obs.push(...this.commands);
@@ -310,8 +294,7 @@ export class OnnxController {
     obs.push(...this.motorTargets);
 
     // Foot contacts (2)
-    const contacts = this.getFeetContacts();
-    obs.push(...contacts);
+    obs.push(...this.getFeetContacts());
 
     // Imitation phase (2)
     obs.push(...this.imitationPhase);
@@ -319,24 +302,23 @@ export class OnnxController {
     return new Float32Array(obs);
   }
 
+  /**
+   * Synchronous step - called every physics step from the render loop.
+   * At every decimation boundary, runs inference synchronously using cached action.
+   */
   step(timestep) {
-    if (!this.session || !this.enabled) {
-      return;
-    }
+    if (!this.session || !this.enabled) return;
 
     this.stepCounter++;
 
-    // Only run policy at control frequency (every decimation steps)
-    if (this.stepCounter % this.decimation !== 0) {
-      // Still apply motor targets
-      if (this.motorTargets) {
-        const ctrl = this.data.ctrl;
-        for (let i = 0; i < Math.min(this.numDofs, ctrl.length); i++) {
-          ctrl[i] = this.motorTargets[i];
-        }
-      }
-      return;
+    // Apply motor targets every step
+    const ctrl = this.data.ctrl;
+    for (let i = 0; i < Math.min(this.numDofs, ctrl.length); i++) {
+      ctrl[i] = this.motorTargets[i];
     }
+
+    // Only compute new action at control frequency (every decimation steps)
+    if (this.stepCounter % this.decimation !== 0) return;
 
     // Update imitation phase
     this.imitationI = (this.imitationI + 1) % this.nbStepsInPeriod;
@@ -344,16 +326,16 @@ export class OnnxController {
     this.imitationPhase[0] = Math.cos(phase);
     this.imitationPhase[1] = Math.sin(phase);
 
-    // Apply pending action from previous inference
-    if (this.pendingAction) {
+    // Apply current action (computed at previous control step or from initial inference)
+    if (this.currentAction) {
       // Update action history
       this.lastLastLastAction.set(this.lastLastAction);
       this.lastLastAction.set(this.lastAction);
-      this.lastAction.set(this.pendingAction);
+      this.lastAction.set(this.currentAction);
 
-      // Compute motor targets
+      // Compute motor targets: default + action * scale
       for (let i = 0; i < this.numDofs; i++) {
-        this.motorTargets[i] = this.defaultActuator[i] + this.pendingAction[i] * this.actionScale;
+        this.motorTargets[i] = this.defaultActuator[i] + this.currentAction[i] * this.actionScale;
       }
 
       // Apply velocity limits
@@ -366,28 +348,25 @@ export class OnnxController {
         this.prevMotorTargets[i] = this.motorTargets[i];
       }
 
-      // Apply to MuJoCo
-      const ctrl = this.data.ctrl;
+      // Apply to ctrl
       for (let i = 0; i < Math.min(this.numDofs, ctrl.length); i++) {
         ctrl[i] = this.motorTargets[i];
       }
-
-      this.pendingAction = null;
     }
 
-    // Start new inference
-    if (!this.inferenceRunning) {
-      this.runInference();
-    }
+    // Start async inference for next control step
+    this.runInferenceAsync();
   }
 
-  async runFirstInference() {
-    // Run initial inference synchronously so we have an action ready for first decimation step
-    // Note: We do NOT apply it immediately - Python also waits until first decimation step
-    console.log('Running initial inference...');
+  async runInferenceAsync() {
     try {
       const obs = this.getObservation();
-      console.log('Initial observation size:', obs.length);
+
+      // Check for NaN
+      if (obs.some(v => isNaN(v))) {
+        console.warn('Observation contains NaN, skipping inference');
+        return;
+      }
 
       const inputTensor = new ort.Tensor('float32', obs, [1, obs.length]);
       const feeds = {};
@@ -397,57 +376,32 @@ export class OnnxController {
       const output = results[this.outputName];
 
       if (output) {
-        this.pendingAction = new Float32Array(output.data);
-        console.log('Initial action ready (will apply at first decimation):', this.pendingAction.slice(0, 5));
-        // Don't apply immediately - let step() handle it at first decimation step
-      }
-    } catch (e) {
-      console.error('Initial inference error:', e);
-    }
-  }
-
-  async runInference() {
-    if (this.inferenceRunning) return;
-    this.inferenceRunning = true;
-
-    try {
-      const obs = this.getObservation();
-
-      // Debug: log observation size and sample values
-      if (this.stepCounter <= 30) {
-        const gyro = [obs[0], obs[1], obs[2]];
-        const accel = [obs[3], obs[4], obs[5]];
-        const cmd = [obs[6], obs[7], obs[8]];
-        const height = this.data.qpos[2];
-        console.log(`Step ${this.stepCounter}: h=${height.toFixed(3)}, gyro=[${gyro.map(v=>v.toFixed(3)).join(',')}], accel=[${accel.map(v=>v.toFixed(3)).join(',')}], cmd=[${cmd.map(v=>v.toFixed(2)).join(',')}]`);
-
-        // Check for NaN or undefined
-        const hasNaN = obs.some(v => isNaN(v) || v === undefined);
-        if (hasNaN) {
-          console.error('Observation contains NaN or undefined!', obs);
-        }
-      }
-
-      // Run ONNX inference
-      const inputTensor = new ort.Tensor('float32', obs, [1, obs.length]);
-      const feeds = {};
-      feeds[this.inputName] = inputTensor;
-
-      const results = await this.session.run(feeds);
-      const output = results[this.outputName];
-
-      if (output) {
-        this.pendingAction = new Float32Array(output.data);
-        // Debug: log action
-        if (this.stepCounter <= 20) {
-          console.log(`Action: [${this.pendingAction.slice(0, 5).map(v => v.toFixed(3)).join(', ')}...]`);
-        }
+        this.currentAction = new Float32Array(output.data);
       }
     } catch (e) {
       console.error('ONNX inference error:', e);
     }
+  }
 
-    this.inferenceRunning = false;
+  /**
+   * Run first inference to have an action ready before simulation starts.
+   */
+  async runFirstInference() {
+    try {
+      const obs = this.getObservation();
+      const inputTensor = new ort.Tensor('float32', obs, [1, obs.length]);
+      const feeds = {};
+      feeds[this.inputName] = inputTensor;
+
+      const results = await this.session.run(feeds);
+      const output = results[this.outputName];
+
+      if (output) {
+        this.currentAction = new Float32Array(output.data);
+      }
+    } catch (e) {
+      console.error('Initial inference error:', e);
+    }
   }
 
   reset() {
@@ -457,10 +411,9 @@ export class OnnxController {
 
     this.imitationI = 0;
     this.imitationPhase = [0, 0];
-    // Keep zero command (standing still)
     this.commands = [0, 0, 0, 0, 0, 0, 0];
     this.stepCounter = 0;
-    this.pendingAction = null;
+    this.currentAction = null;
 
     if (this.motorTargets && this.defaultActuator) {
       this.motorTargets.set(this.defaultActuator);

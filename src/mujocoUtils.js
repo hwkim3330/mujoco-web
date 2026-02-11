@@ -357,6 +357,9 @@ export function setupGUI(parentContext) {
       updateCommand();
     });
 
+    // Camera follow toggle
+    robotFolder.add(parentContext.params, 'cameraFollow').name('Camera Follow');
+
     robotFolder.open();
 
     // Add help text

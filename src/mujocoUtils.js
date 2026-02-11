@@ -39,6 +39,8 @@ export async function reloadFunc() {
     this.onnxController.numDofs = this.model.nu;
     this.onnxController.initState();
     this.onnxController.findSensorAddresses();
+    this.onnxController.findBodyIds();
+    this.onnxController.findJointIndices();
     this.onnxController.reset();
     this.onnxController.enabled = true;
     console.log('ONNX controller reinitialized for OpenDuck scene');

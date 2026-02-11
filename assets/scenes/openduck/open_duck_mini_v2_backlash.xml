@@ -47,7 +47,7 @@
       <!-- <joint damping="0.60" frictionloss="0.052" armature="0.028"/>
       <position kp="17.8" kv="0.0" forcerange="-3.35 3.35"/> -->
       <joint damping="0.56" frictionloss="0.068" armature="0.027"/>
-      <position kp="17.11" kv="0.0" forcerange="-3.23 3.23"/>
+      <position kp="13.37" kv="0.0" forcerange="-3.23 3.23"/>
     </default>
     <default class="backlash">
       <!-- +/- 0.5° of backlash -->
@@ -108,6 +108,9 @@
         <!-- Part wj_wk00_0124bottomcase_45_3 -->
         <!-- Part wj_wk00_0122topcabinetcase_95_3 -->
         <!-- Part passive_palonier_3 -->
+        <!-- Trunk collision geom (prevents body from passing through floor) -->
+        <geom type="box" size="0.06 0.04 0.03" pos="-0.048 0 0.038"
+          contype="1" conaffinity="1" group="3" condim="3" rgba="0 0 0 0"/>
         <!-- Frame trunk -->
         <site group="0" name="trunk" pos="-0.024 -2.41127e-16 0.0881909" quat="1 -2.77556e-17 -0 -0"/>
         <!-- Frame imu -->
@@ -315,6 +318,9 @@
                 <!-- Part wj_wk00_0124bottomcase_45_10 -->
                 <!-- Part wj_wk00_0122topcabinetcase_95_10 -->
                 <!-- Part passive_palonier_10 -->
+                <!-- Head collision geom (prevents head from passing through floor) -->
+                <geom type="sphere" size="0.04" pos="0.02 0 0.03"
+                  contype="1" conaffinity="1" group="3" condim="3" rgba="0 0 0 0"/>
                 <!-- Frame head -->
                 <site group="0" name="head" pos="0.04245 1.88922e-17 0.03595"
                   quat="0.707107 2.48509e-16 0.707107 5.27356e-16"/>

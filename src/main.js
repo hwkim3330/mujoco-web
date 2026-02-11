@@ -269,7 +269,9 @@ export class MuJoCoDemo {
 
     if (!this.params["paused"]) {
       let timestep = this.model.opt.timestep;
-      if (timeMS - this.mujoco_time > 35.0) { this.mujoco_time = timeMS; }
+      // Never skip physics entirely - cap catch-up instead.
+      // Old 35ms skip caused lost physics frames when ONNX inference was slow.
+      if (timeMS - this.mujoco_time > 100.0) { this.mujoco_time = timeMS - 100.0; }
       while (this.mujoco_time < timeMS) {
 
         // Jitter the control state with gaussian random noise (non-ONNX scenes)

@@ -64,6 +64,10 @@ export class OnnxController {
     this.leftFootBodyId = -1;
     this.rightFootBodyId = -1;
     this.floorBodyId = -1;
+
+    // Joint index mapping (handles backlash joints that shift qpos layout)
+    this.qposIndices = null;
+    this.qvelIndices = null;
   }
 
   async loadModel(url) {
@@ -84,6 +88,7 @@ export class OnnxController {
       this.initState();
       this.findSensorAddresses();
       this.findBodyIds();
+      this.findJointIndices();
 
       return true;
     } catch (e) {
@@ -183,6 +188,50 @@ export class OnnxController {
     }
   }
 
+  findJointIndices() {
+    // Map actuator index → qpos/qvel address via joint lookup.
+    // Critical for backlash model where extra joints shift the qpos layout.
+    // Actuator names match joint names in the XML.
+    const jointNames = [
+      'left_hip_yaw', 'left_hip_roll', 'left_hip_pitch', 'left_knee', 'left_ankle',
+      'neck_pitch', 'head_pitch', 'head_yaw', 'head_roll',
+      'right_hip_yaw', 'right_hip_roll', 'right_hip_pitch', 'right_knee', 'right_ankle'
+    ];
+
+    this.qposIndices = new Int32Array(this.numDofs);
+    this.qvelIndices = new Int32Array(this.numDofs);
+
+    let success = false;
+    try {
+      if (this.model.jnt_qposadr && this.model.jnt_dofadr) {
+        for (let i = 0; i < this.numDofs; i++) {
+          // mjOBJ_JOINT = 3
+          const jointId = this.mujoco.mj_name2id(this.model, 3, jointNames[i]);
+          if (jointId >= 0) {
+            this.qposIndices[i] = this.model.jnt_qposadr[jointId];
+            this.qvelIndices[i] = this.model.jnt_dofadr[jointId];
+          } else {
+            throw new Error(`Joint "${jointNames[i]}" not found`);
+          }
+        }
+        success = true;
+      }
+    } catch (e) {
+      console.warn('Joint index lookup failed, using fallback:', e);
+    }
+
+    // Fallback: simple offset (works for non-backlash model)
+    if (!success) {
+      for (let i = 0; i < this.numDofs; i++) {
+        this.qposIndices[i] = 7 + i;
+        this.qvelIndices[i] = 6 + i;
+      }
+    }
+
+    console.log('Joint qpos indices:', Array.from(this.qposIndices));
+    console.log('Joint qvel indices:', Array.from(this.qvelIndices));
+  }
+
   setCommand(linX, linY, angZ) {
     this.commands[0] = Math.max(-0.15, Math.min(0.15, linX));
     this.commands[1] = Math.max(-0.2, Math.min(0.2, linY));
@@ -207,19 +256,19 @@ export class OnnxController {
   }
 
   getActuatorJointsQpos() {
-    // qpos layout: [0:7]=freejoint, [7:7+nu]=hinge joints (matching actuator order)
+    // Uses qposIndices for correct mapping (handles backlash joints)
     const angles = new Float32Array(this.numDofs);
     for (let i = 0; i < this.numDofs; i++) {
-      angles[i] = this.data.qpos[7 + i];
+      angles[i] = this.data.qpos[this.qposIndices[i]];
     }
     return angles;
   }
 
   getActuatorJointsQvel() {
-    // qvel layout: [0:6]=freejoint, [6:6+nu]=hinge velocities (matching actuator order)
+    // Uses qvelIndices for correct mapping (handles backlash joints)
     const vels = new Float32Array(this.numDofs);
     for (let i = 0; i < this.numDofs; i++) {
-      vels[i] = this.data.qvel[6 + i];
+      vels[i] = this.data.qvel[this.qvelIndices[i]];
     }
     return vels;
   }
@@ -363,11 +412,12 @@ export class OnnxController {
       console.log('=== END DIAGNOSTIC ===');
     }
 
-    // Brief logging for first 20 policy steps
-    if (this.policyStepCount <= 20) {
+    // Brief logging for first 50 policy steps
+    if (this.policyStepCount <= 50) {
+      const baseX = (this.data.qpos[0] || 0).toFixed(4);
       const baseH = (this.data.qpos[2] || 0).toFixed(4);
       const contacts = this.getFeetContacts();
-      console.log(`[Policy #${this.policyStepCount}] H=${baseH} contacts=[${contacts}] ncon=${this.data.ncon}`);
+      console.log(`[Policy #${this.policyStepCount}] X=${baseX} H=${baseH} contacts=[${contacts}] ncon=${this.data.ncon}`);
     }
 
     // 3. Run ONNX inference (synchronous via await)
@@ -385,9 +435,9 @@ export class OnnxController {
       // Check if actions are in expected range (tanh should give [-1,1])
       const maxAct = Math.max(...action);
       const minAct = Math.min(...action);
-      if (this.policyStepCount <= 20) {
+      if (this.policyStepCount <= 5) {
         const actStr = Array.from(action).map(v => v.toFixed(3));
-        console.log(`  action=[${actStr}] range=[${minAct.toFixed(3)}, ${maxAct.toFixed(3)}] dims=[${output.dims}]`);
+        console.log(`  action=[${actStr}] range=[${minAct.toFixed(3)}, ${maxAct.toFixed(3)}]`);
         if (maxAct > 1.0 || minAct < -1.0) {
           console.warn('  WARNING: Actions outside [-1,1] - tanh may not be in ONNX graph!');
         }
@@ -419,7 +469,7 @@ export class OnnxController {
         ctrl[i] = this.motorTargets[i];
       }
 
-      if (this.policyStepCount <= 20) {
+      if (this.policyStepCount <= 5) {
         const ctrlStr = Array.from(ctrl).slice(0, this.numDofs).map(v => v.toFixed(3));
         console.log(`  ctrl=[${ctrlStr}]`);
       }

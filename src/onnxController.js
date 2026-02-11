@@ -47,16 +47,22 @@ export class OnnxController {
     // Imitation phase (updated before first obs, so initial value doesn't matter)
     this.imitationI = 0;
     this.nbStepsInPeriod = 50;
-    this.imitationPhase = [0, 0]; // Matches Python init; updated before first use
+    this.imitationPhase = [0, 0];
 
     // Step counter - incremented AFTER each mj_step (matches Python)
     this.stepCounter = 0;
 
+    // Policy step counter for diagnostics
+    this.policyStepCount = 0;
+
     // Sensor addresses
     this.gyroAddr = -1;
     this.accelAddr = -1;
-    this.leftFootPosAddr = -1;
-    this.rightFootPosAddr = -1;
+
+    // Body IDs for contact detection (matching Python check_contact)
+    this.leftFootBodyId = -1;
+    this.rightFootBodyId = -1;
+    this.floorBodyId = -1;
   }
 
   async loadModel(url) {
@@ -71,10 +77,12 @@ export class OnnxController {
 
       this.inputName = this.session.inputNames[0];
       this.outputName = this.session.outputNames[0];
+      console.log(`ONNX input: "${this.inputName}", output: "${this.outputName}"`);
 
       this.numDofs = this.model.nu;
       this.initState();
       this.findSensorAddresses();
+      this.findBodyIds();
 
       return true;
     } catch (e) {
@@ -117,6 +125,8 @@ export class OnnxController {
     for (let i = 0; i < Math.min(n, ctrl.length); i++) {
       ctrl[i] = this.motorTargets[i];
     }
+
+    console.log('Default actuator:', Array.from(this.defaultActuator).map(v => v.toFixed(3)));
   }
 
   findSensorAddresses() {
@@ -140,25 +150,36 @@ export class OnnxController {
 
         if (sensorName === 'gyro') this.gyroAddr = adr;
         if (sensorName === 'accelerometer') this.accelAddr = adr;
-        if (sensorName === 'left_foot_pos') this.leftFootPosAddr = adr;
-        if (sensorName === 'right_foot_pos') this.rightFootPosAddr = adr;
       }
     }
 
-    // Fallback by sensor type
+    // Fallback by sensor type (correct MuJoCo enum: GYRO=3, ACCELEROMETER=1)
     if (this.gyroAddr < 0 || this.accelAddr < 0) {
       for (let i = 0; i < nsensor; i++) {
         const type = this.model.sensor_type[i];
         const adr = this.model.sensor_adr[i];
-        if (type === 8 && this.gyroAddr < 0) this.gyroAddr = adr;
-        if (type === 9 && this.accelAddr < 0) this.accelAddr = adr;
+        if (type === 3 && this.gyroAddr < 0) this.gyroAddr = adr;  // mjSENS_GYRO=3
+        if (type === 1 && this.accelAddr < 0) this.accelAddr = adr; // mjSENS_ACCELEROMETER=1
       }
     }
 
     if (this.gyroAddr < 0) this.gyroAddr = 0;
     if (this.accelAddr < 0) this.accelAddr = 6;
 
-    console.log(`Sensors: gyro@${this.gyroAddr}, accel@${this.accelAddr}, leftFoot@${this.leftFootPosAddr}, rightFoot@${this.rightFootPosAddr}`);
+    console.log(`Sensors: gyro@${this.gyroAddr}, accel@${this.accelAddr}`);
+  }
+
+  findBodyIds() {
+    // Find body IDs for contact detection (matching Python: check_contact)
+    try {
+      // mjOBJ_BODY = 1
+      this.leftFootBodyId = this.mujoco.mj_name2id(this.model, 1, 'foot_assembly');
+      this.rightFootBodyId = this.mujoco.mj_name2id(this.model, 1, 'foot_assembly_2');
+      this.floorBodyId = this.mujoco.mj_name2id(this.model, 1, 'floor');
+      console.log(`Bodies: leftFoot=${this.leftFootBodyId}, rightFoot=${this.rightFootBodyId}, floor=${this.floorBodyId}`);
+    } catch (e) {
+      console.warn('Could not find body IDs for contact detection:', e);
+    }
   }
 
   setCommand(linX, linY, angZ) {
@@ -201,17 +222,36 @@ export class OnnxController {
   }
 
   getFeetContacts() {
-    // Use foot position sensors for WASM contact detection
-    // Check if foot z-position is near ground (z close to 0)
-    const contactThreshold = 0.025; // meters (generous to avoid false negatives)
+    // Match Python exactly: check_contact(data, "foot_assembly", "floor")
+    // Iterates data.contact array and checks geom body IDs
+    if (this.leftFootBodyId >= 0 && this.rightFootBodyId >= 0 && this.floorBodyId >= 0) {
+      let leftContact = 0.0;
+      let rightContact = 0.0;
 
-    if (this.leftFootPosAddr >= 0 && this.rightFootPosAddr >= 0) {
-      const leftZ = this.data.sensordata[this.leftFootPosAddr + 2];
-      const rightZ = this.data.sensordata[this.rightFootPosAddr + 2];
-      return [
-        leftZ < contactThreshold ? 1.0 : 0.0,
-        rightZ < contactThreshold ? 1.0 : 0.0
-      ];
+      const ncon = this.data.ncon;
+      for (let i = 0; i < ncon; i++) {
+        try {
+          const contact = this.data.contact.get(i);
+          if (!contact) continue;
+          const body1 = this.model.geom_bodyid[contact.geom1];
+          const body2 = this.model.geom_bodyid[contact.geom2];
+
+          // Check left foot - floor contact
+          if ((body1 === this.leftFootBodyId && body2 === this.floorBodyId) ||
+              (body1 === this.floorBodyId && body2 === this.leftFootBodyId)) {
+            leftContact = 1.0;
+          }
+          // Check right foot - floor contact
+          if ((body1 === this.rightFootBodyId && body2 === this.floorBodyId) ||
+              (body1 === this.floorBodyId && body2 === this.rightFootBodyId)) {
+            rightContact = 1.0;
+          }
+        } catch (e) {
+          break;
+        }
+      }
+
+      return [leftContact, rightContact];
     }
 
     // Fallback: base height heuristic
@@ -274,6 +314,8 @@ export class OnnxController {
   async runPolicy() {
     if (!this.session || !this.enabled) return;
 
+    this.policyStepCount++;
+
     // 1. Update imitation phase (matches Python: increment BEFORE obs)
     this.imitationI = (this.imitationI + 1) % this.nbStepsInPeriod;
     const phase = (this.imitationI / this.nbStepsInPeriod) * 2 * Math.PI;
@@ -287,6 +329,15 @@ export class OnnxController {
       return;
     }
 
+    // Diagnostic logging for first 20 policy steps
+    if (this.policyStepCount <= 20) {
+      const baseH = (this.data.qpos[2] || 0).toFixed(4);
+      const gyro = this.getGyro().map(v => v.toFixed(3));
+      const accel = this.getAccelerometer().map(v => v.toFixed(3));
+      const contacts = this.getFeetContacts();
+      console.log(`[Policy #${this.policyStepCount}] baseH=${baseH} gyro=[${gyro}] accel=[${accel}] contacts=[${contacts}] phase=[${this.imitationPhase.map(v=>v.toFixed(3))}] obs_len=${obs.length}`);
+    }
+
     // 3. Run ONNX inference (synchronous via await)
     try {
       const inputTensor = new ort.Tensor('float32', obs, [1, obs.length]);
@@ -298,6 +349,12 @@ export class OnnxController {
       if (!output) return;
 
       const action = new Float32Array(output.data);
+
+      // Diagnostic logging for first 20 steps
+      if (this.policyStepCount <= 20) {
+        const actStr = Array.from(action).map(v => v.toFixed(3));
+        console.log(`  action=[${actStr}] shape=[${output.dims}]`);
+      }
 
       // 4. Update action history AFTER obs and inference (matches Python)
       this.lastLastLastAction.set(this.lastLastAction);
@@ -324,6 +381,11 @@ export class OnnxController {
       for (let i = 0; i < Math.min(this.numDofs, ctrl.length); i++) {
         ctrl[i] = this.motorTargets[i];
       }
+
+      if (this.policyStepCount <= 20) {
+        const ctrlStr = Array.from(ctrl).slice(0, this.numDofs).map(v => v.toFixed(3));
+        console.log(`  ctrl=[${ctrlStr}]`);
+      }
     } catch (e) {
       console.error('ONNX inference error:', e);
     }
@@ -335,9 +397,10 @@ export class OnnxController {
     if (this.lastLastLastAction) this.lastLastLastAction.fill(0);
 
     this.imitationI = 0;
-    this.imitationPhase = [0, 0]; // Updated before first use
+    this.imitationPhase = [0, 0];
     this.commands = [0, 0, 0, 0, 0, 0, 0];
     this.stepCounter = 0;
+    this.policyStepCount = 0;
 
     if (this.motorTargets && this.defaultActuator) {
       this.motorTargets.set(this.defaultActuator);

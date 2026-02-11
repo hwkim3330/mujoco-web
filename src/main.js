@@ -326,6 +326,17 @@ export class MuJoCoDemo {
       }
     }
 
+    // Update status bar with debug info
+    if (this.onnxController && this.onnxController.enabled && this.params.scene.includes('openduck')) {
+      const statusBar = document.getElementById('status-bar');
+      if (statusBar && this.onnxController.policyStepCount > 0) {
+        const h = (this.data.qpos[2] || 0).toFixed(3);
+        const contacts = this.onnxController.getFeetContacts();
+        const cmd = this.onnxController.commands;
+        statusBar.textContent = `H:${h} | L:${contacts[0]?'Y':'N'} R:${contacts[1]?'Y':'N'} | cmd:[${cmd[0].toFixed(2)},${cmd[1].toFixed(2)}] | step:${this.onnxController.policyStepCount}`;
+      }
+    }
+
     // Camera follow - track the duck's base body
     if (this.params.cameraFollow && this.params.scene.includes('openduck')) {
       const baseX = this.data.qpos[0];

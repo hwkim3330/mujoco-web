@@ -1,6 +1,18 @@
 /**
  * ONNX-based Robot Controller for OpenDuck Mini
  * Ported from Open_Duck_Playground/playground/open_duck_mini_v2/mujoco_infer.py
+ *
+ * Control loop matches Python EXACTLY:
+ *   1. mj_step (physics)
+ *   2. counter++
+ *   3. if counter % decimation == 0:
+ *        a. update imitation phase
+ *        b. obs = get_obs()        (uses OLD action history, OLD motor_targets)
+ *        c. action = policy(obs)    (synchronous via await)
+ *        d. update action history   (AFTER obs)
+ *        e. motor_targets = default + action * scale
+ *        f. velocity clamp
+ *        g. data.ctrl = motor_targets
  */
 
 export class OnnxController {
@@ -32,16 +44,13 @@ export class OnnxController {
     // Commands [lin_vel_x, lin_vel_y, ang_vel, neck_pitch, head_pitch, head_yaw, head_roll]
     this.commands = [0, 0, 0, 0, 0, 0, 0];
 
-    // Imitation phase - MUST start on unit circle, NOT [0,0]
-    // Python starts at i=0, first inference at i=1 → phase = 2π/50
+    // Imitation phase (updated before first obs, so initial value doesn't matter)
     this.imitationI = 0;
     this.nbStepsInPeriod = 50;
-    this.imitationPhase = [1, 0]; // cos(0), sin(0) - valid unit circle value
+    this.imitationPhase = [0, 0]; // Matches Python init; updated before first use
 
-    // Action state
-    this.currentAction = null;
+    // Step counter - incremented AFTER each mj_step (matches Python)
     this.stepCounter = 0;
-    this.inferenceRunning = false;
 
     // Sensor addresses
     this.gyroAddr = -1;
@@ -82,7 +91,6 @@ export class OnnxController {
     this.motorTargets = new Float32Array(n);
     this.prevMotorTargets = new Float32Array(n);
     this.defaultActuator = new Float32Array(n);
-    this.currentAction = null;
 
     if (this.model.nkey > 0 && this.model.key_ctrl) {
       for (let i = 0; i < n; i++) {
@@ -103,6 +111,12 @@ export class OnnxController {
       this.motorTargets[i] = this.defaultActuator[i];
       this.prevMotorTargets[i] = this.defaultActuator[i];
     }
+
+    // Set initial ctrl to default (matches Python: data.ctrl[:] = default_actuator)
+    const ctrl = this.data.ctrl;
+    for (let i = 0; i < Math.min(n, ctrl.length); i++) {
+      ctrl[i] = this.motorTargets[i];
+    }
   }
 
   findSensorAddresses() {
@@ -118,7 +132,6 @@ export class OnnxController {
       return name;
     };
 
-    // Search all sensors by name
     if (names && this.model.name_sensoradr) {
       for (let i = 0; i < nsensor; i++) {
         const nameAdr = this.model.name_sensoradr[i];
@@ -142,7 +155,6 @@ export class OnnxController {
       }
     }
 
-    // Hardcoded fallback
     if (this.gyroAddr < 0) this.gyroAddr = 0;
     if (this.accelAddr < 0) this.accelAddr = 6;
 
@@ -189,12 +201,11 @@ export class OnnxController {
   }
 
   getFeetContacts() {
-    // Use foot position sensors for reliable WASM contact detection
-    // Check if foot z-position is near ground (z ≈ 0)
-    const contactThreshold = 0.015; // meters
+    // Use foot position sensors for WASM contact detection
+    // Check if foot z-position is near ground (z close to 0)
+    const contactThreshold = 0.025; // meters (generous to avoid false negatives)
 
     if (this.leftFootPosAddr >= 0 && this.rightFootPosAddr >= 0) {
-      // Foot pos sensors: [x, y, z] - check z component
       const leftZ = this.data.sensordata[this.leftFootPosAddr + 2];
       const rightZ = this.data.sensordata[this.rightFootPosAddr + 2];
       return [
@@ -232,12 +243,12 @@ export class OnnxController {
       obs.push(jointVel[i] * this.dofVelScale);
     }
 
-    // Last actions (numDofs * 3)
+    // Last actions (numDofs * 3) - MUST use values from BEFORE this step's update
     obs.push(...this.lastAction);
     obs.push(...this.lastLastAction);
     obs.push(...this.lastLastLastAction);
 
-    // Motor targets (numDofs)
+    // Motor targets (numDofs) - MUST use values from BEFORE this step's update
     obs.push(...this.motorTargets);
 
     // Foot contacts (2)
@@ -250,41 +261,55 @@ export class OnnxController {
   }
 
   /**
-   * Called every physics step from the render loop.
-   * Matches Python timing: mj_step first, then policy at decimation boundary.
+   * Run policy at decimation boundary. Called AFTER mj_step.
+   * Matches Python mujoco_infer.py exactly:
+   *   1. Update imitation phase
+   *   2. Build observation (OLD action history, OLD motor_targets)
+   *   3. Run ONNX inference (synchronous via await)
+   *   4. Update action history (AFTER obs and inference)
+   *   5. Compute new motor_targets
+   *   6. Velocity clamp
+   *   7. Apply to ctrl (persists for next decimation physics steps)
    */
-  step(timestep) {
+  async runPolicy() {
     if (!this.session || !this.enabled) return;
 
-    this.stepCounter++;
-
-    // Apply motor targets every step (position actuators hold their target)
-    const ctrl = this.data.ctrl;
-    for (let i = 0; i < Math.min(this.numDofs, ctrl.length); i++) {
-      ctrl[i] = this.motorTargets[i];
-    }
-
-    // Only run policy at control frequency
-    if (this.stepCounter % this.decimation !== 0) return;
-
-    // Update imitation phase (matches Python: increment BEFORE obs)
+    // 1. Update imitation phase (matches Python: increment BEFORE obs)
     this.imitationI = (this.imitationI + 1) % this.nbStepsInPeriod;
     const phase = (this.imitationI / this.nbStepsInPeriod) * 2 * Math.PI;
     this.imitationPhase[0] = Math.cos(phase);
     this.imitationPhase[1] = Math.sin(phase);
 
-    // Apply action from previous inference (if available)
-    if (this.currentAction) {
+    // 2. Build observation with CURRENT (old) state
+    const obs = this.getObservation();
+    if (obs.some(v => isNaN(v))) {
+      console.warn('NaN in observation, skipping');
+      return;
+    }
+
+    // 3. Run ONNX inference (synchronous via await)
+    try {
+      const inputTensor = new ort.Tensor('float32', obs, [1, obs.length]);
+      const feeds = {};
+      feeds[this.inputName] = inputTensor;
+
+      const results = await this.session.run(feeds);
+      const output = results[this.outputName];
+      if (!output) return;
+
+      const action = new Float32Array(output.data);
+
+      // 4. Update action history AFTER obs and inference (matches Python)
       this.lastLastLastAction.set(this.lastLastAction);
       this.lastLastAction.set(this.lastAction);
-      this.lastAction.set(this.currentAction);
+      this.lastAction.set(action);
 
-      // motor_targets = default + action * scale
+      // 5. Compute new motor targets
       for (let i = 0; i < this.numDofs; i++) {
-        this.motorTargets[i] = this.defaultActuator[i] + this.currentAction[i] * this.actionScale;
+        this.motorTargets[i] = this.defaultActuator[i] + action[i] * this.actionScale;
       }
 
-      // Velocity clamp
+      // 6. Velocity clamp (matches Python np.clip)
       for (let i = 0; i < this.numDofs; i++) {
         const maxChange = this.maxMotorVelocity * this.ctrlDt;
         const diff = this.motorTargets[i] - this.prevMotorTargets[i];
@@ -294,45 +319,14 @@ export class OnnxController {
         this.prevMotorTargets[i] = this.motorTargets[i];
       }
 
-      // Apply new targets
+      // 7. Apply to ctrl (persists for next decimation steps)
+      const ctrl = this.data.ctrl;
       for (let i = 0; i < Math.min(this.numDofs, ctrl.length); i++) {
         ctrl[i] = this.motorTargets[i];
-      }
-    }
-
-    // Start async inference for next control step
-    if (!this.inferenceRunning) {
-      this.runInferenceAsync();
-    }
-  }
-
-  async runInferenceAsync() {
-    if (this.inferenceRunning) return;
-    this.inferenceRunning = true;
-
-    try {
-      const obs = this.getObservation();
-      if (obs.some(v => isNaN(v))) {
-        console.warn('NaN in observation, skipping');
-        this.inferenceRunning = false;
-        return;
-      }
-
-      const inputTensor = new ort.Tensor('float32', obs, [1, obs.length]);
-      const feeds = {};
-      feeds[this.inputName] = inputTensor;
-
-      const results = await this.session.run(feeds);
-      const output = results[this.outputName];
-
-      if (output) {
-        this.currentAction = new Float32Array(output.data);
       }
     } catch (e) {
       console.error('ONNX inference error:', e);
     }
-
-    this.inferenceRunning = false;
   }
 
   reset() {
@@ -341,15 +335,21 @@ export class OnnxController {
     if (this.lastLastLastAction) this.lastLastLastAction.fill(0);
 
     this.imitationI = 0;
-    this.imitationPhase = [1, 0]; // Valid unit circle value
+    this.imitationPhase = [0, 0]; // Updated before first use
     this.commands = [0, 0, 0, 0, 0, 0, 0];
     this.stepCounter = 0;
-    this.currentAction = null;
-    this.inferenceRunning = false;
 
     if (this.motorTargets && this.defaultActuator) {
       this.motorTargets.set(this.defaultActuator);
       this.prevMotorTargets.set(this.defaultActuator);
+    }
+
+    // Reset ctrl to default
+    if (this.data && this.data.ctrl) {
+      const ctrl = this.data.ctrl;
+      for (let i = 0; i < Math.min(this.numDofs, ctrl.length); i++) {
+        ctrl[i] = this.defaultActuator[i];
+      }
     }
   }
 }

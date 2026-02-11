@@ -83,7 +83,8 @@ export class MuJoCoDemo {
     this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
     this.renderer.useLegacyLights = true;
 
-    this.renderer.setAnimationLoop( this.render.bind(this) );
+    // Use manual RAF loop instead of setAnimationLoop (needed for async render)
+    this.startAnimationLoop();
 
     this.container.appendChild( this.renderer.domElement );
 
@@ -103,6 +104,16 @@ export class MuJoCoDemo {
 
     // Initialize the Drag State Manager.
     this.dragStateManager = new DragStateManager(this.scene, this.renderer, this.camera, this.container.parentElement, this.controls);
+  }
+
+  startAnimationLoop() {
+    // Sequential RAF: schedule next frame AFTER current render completes
+    // This prevents overlapping async renders from corrupting physics state
+    const loop = async (timeMS) => {
+      await this.render(timeMS);
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
   }
 
   setupKeyboardControls() {
@@ -189,8 +200,6 @@ export class MuJoCoDemo {
     try {
       const loaded = await this.onnxController.loadModel('./assets/models/openduck_walk.onnx');
       if (loaded) {
-        // Don't run first inference with invalid state - let duck stabilize
-        // First real inference happens at step 10 (first decimation boundary)
         this.onnxController.enabled = true;
         if (statusBar) statusBar.textContent = 'ONNX: active | WASD to walk';
         if (statusBar) statusBar.style.color = '#0f0';
@@ -219,7 +228,7 @@ export class MuJoCoDemo {
     this.renderer.setSize( window.innerWidth, window.innerHeight );
   }
 
-  render(timeMS) {
+  async render(timeMS) {
     this.controls.update();
 
     if (!this.params["paused"]) {
@@ -227,12 +236,8 @@ export class MuJoCoDemo {
       if (timeMS - this.mujoco_time > 35.0) { this.mujoco_time = timeMS; }
       while (this.mujoco_time < timeMS) {
 
-        // Run ONNX controller if enabled
-        if (this.onnxController && this.onnxController.enabled) {
-          this.onnxController.step(timestep);
-        }
-        // Jitter the control state with gaussian random noise
-        else if (this.params["ctrlnoisestd"] > 0.0) {
+        // Jitter the control state with gaussian random noise (non-ONNX scenes)
+        if (!(this.onnxController && this.onnxController.enabled) && this.params["ctrlnoisestd"] > 0.0) {
           let rate  = Math.exp(-timestep / Math.max(1e-10, this.params["ctrlnoiserate"]));
           let scale = this.params["ctrlnoisestd"] * Math.sqrt(1 - rate * rate);
           let currentCtrl = this.data.ctrl;
@@ -260,9 +265,17 @@ export class MuJoCoDemo {
           mujoco.mj_applyFT(this.model, this.data, [force.x, force.y, force.z], [0, 0, 0], [point.x, point.y, point.z], bodyID, this.data.qfrc_applied);
         }
 
+        // 1. Physics step FIRST (matches Python: mj_step before policy)
         mujoco.mj_step(this.model, this.data);
-
         this.mujoco_time += timestep * 1000.0;
+
+        // 2. After mj_step, check if policy should run (matches Python exactly)
+        if (this.onnxController && this.onnxController.enabled && this.onnxController.session) {
+          this.onnxController.stepCounter++;
+          if (this.onnxController.stepCounter % this.onnxController.decimation === 0) {
+            await this.onnxController.runPolicy();
+          }
+        }
       }
 
     } else if (this.params["paused"]) {

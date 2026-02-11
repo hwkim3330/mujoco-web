@@ -372,6 +372,48 @@ export function setupGUI(parentContext) {
   }
   // ========== End Robot Controls ==========
 
+  // ========== General Scene Controls (for non-OpenDuck scenes) ==========
+  if (!parentContext.params.scene.includes('openduck')) {
+    let forceFolder = parentContext.gui.addFolder("Push Controls");
+    parentContext.params.pushForce = 50;
+    forceFolder.add(parentContext.params, 'pushForce', 10, 200, 10).name('Push Force');
+
+    const applyForceToRoot = (fx, fy, fz) => {
+      // Apply force to body 1 (first non-world body)
+      if (parentContext.model.nbody > 1) {
+        const bodyID = 1;
+        const mass = parentContext.model.body_mass[bodyID];
+        const force = parentContext.params.pushForce * mass;
+        const pos = [
+          parentContext.data.xpos[bodyID * 3],
+          parentContext.data.xpos[bodyID * 3 + 1],
+          parentContext.data.xpos[bodyID * 3 + 2]
+        ];
+        parentContext.mujoco.mj_applyFT(
+          parentContext.model, parentContext.data,
+          [fx * force, fy * force, fz * force],
+          [0, 0, 0], pos, bodyID,
+          parentContext.data.qfrc_applied
+        );
+      }
+    };
+
+    document.addEventListener('keydown', (event) => {
+      if (parentContext.params.scene.includes('openduck')) return;
+      switch(event.code) {
+        case 'KeyW': case 'ArrowUp':    applyForceToRoot(1, 0, 0); break;
+        case 'KeyS': case 'ArrowDown':  applyForceToRoot(-1, 0, 0); break;
+        case 'KeyA': case 'ArrowLeft':  applyForceToRoot(0, 1, 0); break;
+        case 'KeyD': case 'ArrowRight': applyForceToRoot(0, -1, 0); break;
+        case 'KeyQ': applyForceToRoot(0, 0, 1); break;
+        case 'KeyE': applyForceToRoot(0, 0, -1); break;
+      }
+    });
+
+    forceFolder.open();
+  }
+  // ========== End General Scene Controls ==========
+
   // Add function that resets the camera to the default position.
   // Can be triggered by pressing ctrl + A.
   document.addEventListener('keydown', (event) => {

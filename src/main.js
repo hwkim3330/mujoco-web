@@ -189,7 +189,8 @@ export class MuJoCoDemo {
     try {
       const loaded = await this.onnxController.loadModel('./assets/models/openduck_walk.onnx');
       if (loaded) {
-        await this.onnxController.runFirstInference();
+        // Don't run first inference with invalid state - let duck stabilize
+        // First real inference happens at step 10 (first decimation boundary)
         this.onnxController.enabled = true;
         if (statusBar) statusBar.textContent = 'ONNX: active | WASD to walk';
         if (statusBar) statusBar.style.color = '#0f0';

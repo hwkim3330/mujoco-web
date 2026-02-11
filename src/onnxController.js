@@ -19,7 +19,6 @@ export class OnnxController {
     this.decimation = 10;
     this.ctrlDt = this.simDt * this.decimation; // 0.02
 
-    // Number of actuators (14 for full model with head)
     this.numDofs = 14;
 
     // State
@@ -33,23 +32,22 @@ export class OnnxController {
     // Commands [lin_vel_x, lin_vel_y, ang_vel, neck_pitch, head_pitch, head_yaw, head_roll]
     this.commands = [0, 0, 0, 0, 0, 0, 0];
 
-    // Imitation phase
+    // Imitation phase - MUST start on unit circle, NOT [0,0]
+    // Python starts at i=0, first inference at i=1 → phase = 2π/50
     this.imitationI = 0;
     this.nbStepsInPeriod = 50;
-    this.imitationPhase = [0, 0];
+    this.imitationPhase = [1, 0]; // cos(0), sin(0) - valid unit circle value
 
-    // Current action (computed synchronously)
+    // Action state
     this.currentAction = null;
     this.stepCounter = 0;
+    this.inferenceRunning = false;
 
     // Sensor addresses
     this.gyroAddr = -1;
     this.accelAddr = -1;
-
-    // Contact geom names for foot detection
-    this.leftFootGeomId = -1;
-    this.rightFootGeomId = -1;
-    this.floorGeomId = -1;
+    this.leftFootPosAddr = -1;
+    this.rightFootPosAddr = -1;
   }
 
   async loadModel(url) {
@@ -61,7 +59,6 @@ export class OnnxController {
 
       this.session = await ort.InferenceSession.create(url);
       console.log('ONNX model loaded:', url);
-      console.log('Input:', this.session.inputNames[0], 'Output:', this.session.outputNames[0]);
 
       this.inputName = this.session.inputNames[0];
       this.outputName = this.session.outputNames[0];
@@ -69,7 +66,6 @@ export class OnnxController {
       this.numDofs = this.model.nu;
       this.initState();
       this.findSensorAddresses();
-      this.findContactGeoms();
 
       return true;
     } catch (e) {
@@ -88,13 +84,11 @@ export class OnnxController {
     this.defaultActuator = new Float32Array(n);
     this.currentAction = null;
 
-    // Get default actuator positions from model keyframe
     if (this.model.nkey > 0 && this.model.key_ctrl) {
       for (let i = 0; i < n; i++) {
         this.defaultActuator[i] = this.model.key_ctrl[i] || 0;
       }
     } else {
-      // Fallback: hardcoded values from scene_flat_terrain.xml keyframe
       const homeCtrl = [
         0.002, 0.053, -0.63, 1.368, -0.784,
         0, 0, 0, 0,
@@ -124,23 +118,21 @@ export class OnnxController {
       return name;
     };
 
-    // Search by name
+    // Search all sensors by name
     if (names && this.model.name_sensoradr) {
       for (let i = 0; i < nsensor; i++) {
         const nameAdr = this.model.name_sensoradr[i];
         const sensorName = getNameAt(nameAdr);
         const adr = this.model.sensor_adr[i];
 
-        if (sensorName === 'gyro') {
-          this.gyroAddr = adr;
-        }
-        if (sensorName === 'accelerometer') {
-          this.accelAddr = adr;
-        }
+        if (sensorName === 'gyro') this.gyroAddr = adr;
+        if (sensorName === 'accelerometer') this.accelAddr = adr;
+        if (sensorName === 'left_foot_pos') this.leftFootPosAddr = adr;
+        if (sensorName === 'right_foot_pos') this.rightFootPosAddr = adr;
       }
     }
 
-    // Fallback by sensor type (mjSENS_GYRO = 8, mjSENS_ACCELEROMETER = 9)
+    // Fallback by sensor type
     if (this.gyroAddr < 0 || this.accelAddr < 0) {
       for (let i = 0; i < nsensor; i++) {
         const type = this.model.sensor_type[i];
@@ -153,29 +145,8 @@ export class OnnxController {
     // Hardcoded fallback
     if (this.gyroAddr < 0) this.gyroAddr = 0;
     if (this.accelAddr < 0) this.accelAddr = 6;
-  }
 
-  findContactGeoms() {
-    // Find geom IDs for foot contact detection
-    const names = this.model.names;
-    const getNameAt = (nameAdr) => {
-      if (!names || nameAdr < 0 || nameAdr >= names.length) return '';
-      let name = '';
-      for (let j = nameAdr; j < names.length && names[j] !== 0; j++) {
-        name += String.fromCharCode(names[j]);
-      }
-      return name;
-    };
-
-    for (let g = 0; g < this.model.ngeom; g++) {
-      if (this.model.name_geomadr) {
-        const nameAdr = this.model.name_geomadr[g];
-        const geomName = getNameAt(nameAdr);
-        if (geomName === 'left_foot_bottom_tpu') this.leftFootGeomId = g;
-        if (geomName === 'right_foot_bottom_tpu') this.rightFootGeomId = g;
-        if (geomName === 'floor') this.floorGeomId = g;
-      }
-    }
+    console.log(`Sensors: gyro@${this.gyroAddr}, accel@${this.accelAddr}, leftFoot@${this.leftFootPosAddr}, rightFoot@${this.rightFootPosAddr}`);
   }
 
   setCommand(linX, linY, angZ) {
@@ -193,77 +164,57 @@ export class OnnxController {
   }
 
   getAccelerometer() {
-    const ax = this.data.sensordata[this.accelAddr] + 1.3; // Gravity compensation (matches training)
-    const ay = this.data.sensordata[this.accelAddr + 1];
-    const az = this.data.sensordata[this.accelAddr + 2];
-    return [ax, ay, az];
+    // Match Python: accelerometer[0] += 1.3
+    return [
+      this.data.sensordata[this.accelAddr] + 1.3,
+      this.data.sensordata[this.accelAddr + 1],
+      this.data.sensordata[this.accelAddr + 2]
+    ];
   }
 
   getActuatorJointsQpos() {
-    // Skip first 7 (floating base: 3 pos + 4 quat)
     const angles = new Float32Array(this.numDofs);
-    const qpos = this.data.qpos;
     for (let i = 0; i < this.numDofs; i++) {
-      angles[i] = qpos[7 + i] || 0;
+      angles[i] = this.data.qpos[7 + i] || 0;
     }
     return angles;
   }
 
   getActuatorJointsQvel() {
-    // Skip first 6 (floating base: 3 linear + 3 angular vel)
     const vels = new Float32Array(this.numDofs);
-    const qvel = this.data.qvel;
     for (let i = 0; i < this.numDofs; i++) {
-      vels[i] = qvel[6 + i] || 0;
+      vels[i] = this.data.qvel[6 + i] || 0;
     }
     return vels;
   }
 
   getFeetContacts() {
-    // Check MuJoCo contact data for foot-floor contacts
-    let leftContact = 0.0;
-    let rightContact = 0.0;
+    // Use foot position sensors for reliable WASM contact detection
+    // Check if foot z-position is near ground (z ≈ 0)
+    const contactThreshold = 0.015; // meters
 
-    const ncon = this.data.ncon;
-    for (let c = 0; c < ncon; c++) {
-      // Each contact has geom1 and geom2
-      const geom1 = this.data.contact_geom1 ? this.data.contact_geom1[c] : -1;
-      const geom2 = this.data.contact_geom2 ? this.data.contact_geom2[c] : -1;
-
-      // Check if left foot contacts floor
-      if ((geom1 === this.leftFootGeomId && geom2 === this.floorGeomId) ||
-          (geom2 === this.leftFootGeomId && geom1 === this.floorGeomId)) {
-        leftContact = 1.0;
-      }
-      // Check if right foot contacts floor
-      if ((geom1 === this.rightFootGeomId && geom2 === this.floorGeomId) ||
-          (geom2 === this.rightFootGeomId && geom1 === this.floorGeomId)) {
-        rightContact = 1.0;
-      }
+    if (this.leftFootPosAddr >= 0 && this.rightFootPosAddr >= 0) {
+      // Foot pos sensors: [x, y, z] - check z component
+      const leftZ = this.data.sensordata[this.leftFootPosAddr + 2];
+      const rightZ = this.data.sensordata[this.rightFootPosAddr + 2];
+      return [
+        leftZ < contactThreshold ? 1.0 : 0.0,
+        rightZ < contactThreshold ? 1.0 : 0.0
+      ];
     }
 
-    // Fallback: if contact data arrays not available, use body height heuristic
-    if (!this.data.contact_geom1 || !this.data.contact_geom2) {
-      // Use foot site positions from sensordata if available
-      // Otherwise simple height-based detection
-      const height = this.data.qpos[2] || 0;
-      if (height < 0.18) {
-        leftContact = 1.0;
-        rightContact = 1.0;
-      }
-    }
-
-    return [leftContact, rightContact];
+    // Fallback: base height heuristic
+    const height = this.data.qpos[2] || 0;
+    return height < 0.18 ? [1.0, 1.0] : [0.0, 0.0];
   }
 
   getObservation() {
-    // Build observation exactly as in mujoco_infer.py get_obs()
     const obs = [];
 
     // Gyro (3)
     obs.push(...this.getGyro());
 
-    // Accelerometer (3) with gravity compensation
+    // Accelerometer (3) with bias
     obs.push(...this.getAccelerometer());
 
     // Commands (7)
@@ -275,19 +226,15 @@ export class OnnxController {
       obs.push(jointAngles[i] - this.defaultActuator[i]);
     }
 
-    // Joint velocities * dof_vel_scale (numDofs)
+    // Joint velocities * scale (numDofs)
     const jointVel = this.getActuatorJointsQvel();
     for (let i = 0; i < this.numDofs; i++) {
       obs.push(jointVel[i] * this.dofVelScale);
     }
 
-    // Last action (numDofs)
+    // Last actions (numDofs * 3)
     obs.push(...this.lastAction);
-
-    // Last last action (numDofs)
     obs.push(...this.lastLastAction);
-
-    // Last last last action (numDofs)
     obs.push(...this.lastLastLastAction);
 
     // Motor targets (numDofs)
@@ -303,42 +250,41 @@ export class OnnxController {
   }
 
   /**
-   * Synchronous step - called every physics step from the render loop.
-   * At every decimation boundary, runs inference synchronously using cached action.
+   * Called every physics step from the render loop.
+   * Matches Python timing: mj_step first, then policy at decimation boundary.
    */
   step(timestep) {
     if (!this.session || !this.enabled) return;
 
     this.stepCounter++;
 
-    // Apply motor targets every step
+    // Apply motor targets every step (position actuators hold their target)
     const ctrl = this.data.ctrl;
     for (let i = 0; i < Math.min(this.numDofs, ctrl.length); i++) {
       ctrl[i] = this.motorTargets[i];
     }
 
-    // Only compute new action at control frequency (every decimation steps)
+    // Only run policy at control frequency
     if (this.stepCounter % this.decimation !== 0) return;
 
-    // Update imitation phase
+    // Update imitation phase (matches Python: increment BEFORE obs)
     this.imitationI = (this.imitationI + 1) % this.nbStepsInPeriod;
     const phase = (this.imitationI / this.nbStepsInPeriod) * 2 * Math.PI;
     this.imitationPhase[0] = Math.cos(phase);
     this.imitationPhase[1] = Math.sin(phase);
 
-    // Apply current action (computed at previous control step or from initial inference)
+    // Apply action from previous inference (if available)
     if (this.currentAction) {
-      // Update action history
       this.lastLastLastAction.set(this.lastLastAction);
       this.lastLastAction.set(this.lastAction);
       this.lastAction.set(this.currentAction);
 
-      // Compute motor targets: default + action * scale
+      // motor_targets = default + action * scale
       for (let i = 0; i < this.numDofs; i++) {
         this.motorTargets[i] = this.defaultActuator[i] + this.currentAction[i] * this.actionScale;
       }
 
-      // Apply velocity limits
+      // Velocity clamp
       for (let i = 0; i < this.numDofs; i++) {
         const maxChange = this.maxMotorVelocity * this.ctrlDt;
         const diff = this.motorTargets[i] - this.prevMotorTargets[i];
@@ -348,23 +294,27 @@ export class OnnxController {
         this.prevMotorTargets[i] = this.motorTargets[i];
       }
 
-      // Apply to ctrl
+      // Apply new targets
       for (let i = 0; i < Math.min(this.numDofs, ctrl.length); i++) {
         ctrl[i] = this.motorTargets[i];
       }
     }
 
     // Start async inference for next control step
-    this.runInferenceAsync();
+    if (!this.inferenceRunning) {
+      this.runInferenceAsync();
+    }
   }
 
   async runInferenceAsync() {
+    if (this.inferenceRunning) return;
+    this.inferenceRunning = true;
+
     try {
       const obs = this.getObservation();
-
-      // Check for NaN
       if (obs.some(v => isNaN(v))) {
-        console.warn('Observation contains NaN, skipping inference');
+        console.warn('NaN in observation, skipping');
+        this.inferenceRunning = false;
         return;
       }
 
@@ -381,27 +331,8 @@ export class OnnxController {
     } catch (e) {
       console.error('ONNX inference error:', e);
     }
-  }
 
-  /**
-   * Run first inference to have an action ready before simulation starts.
-   */
-  async runFirstInference() {
-    try {
-      const obs = this.getObservation();
-      const inputTensor = new ort.Tensor('float32', obs, [1, obs.length]);
-      const feeds = {};
-      feeds[this.inputName] = inputTensor;
-
-      const results = await this.session.run(feeds);
-      const output = results[this.outputName];
-
-      if (output) {
-        this.currentAction = new Float32Array(output.data);
-      }
-    } catch (e) {
-      console.error('Initial inference error:', e);
-    }
+    this.inferenceRunning = false;
   }
 
   reset() {
@@ -410,10 +341,11 @@ export class OnnxController {
     if (this.lastLastLastAction) this.lastLastLastAction.fill(0);
 
     this.imitationI = 0;
-    this.imitationPhase = [0, 0];
+    this.imitationPhase = [1, 0]; // Valid unit circle value
     this.commands = [0, 0, 0, 0, 0, 0, 0];
     this.stepCounter = 0;
     this.currentAction = null;
+    this.inferenceRunning = false;
 
     if (this.motorTargets && this.defaultActuator) {
       this.motorTargets.set(this.defaultActuator);

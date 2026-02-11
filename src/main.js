@@ -119,12 +119,48 @@ export class MuJoCoDemo {
   setupKeyboardControls() {
     document.addEventListener('keydown', (e) => {
       this.keysPressed[e.code] = true;
+
+      // P key: toggle ONNX policy on/off (for physics-only testing)
+      if (e.code === 'KeyP' && this.onnxController) {
+        this.onnxController.enabled = !this.onnxController.enabled;
+        const statusBar = document.getElementById('status-bar');
+        if (!this.onnxController.enabled) {
+          // Reset ctrl to default when disabling
+          this.onnxController.reset();
+          if (statusBar) { statusBar.textContent = 'POLICY DISABLED (P to re-enable)'; statusBar.style.color = '#ff0'; }
+          console.log('ONNX policy DISABLED - physics only mode');
+        } else {
+          if (statusBar) { statusBar.textContent = 'POLICY ENABLED'; statusBar.style.color = '#0f0'; }
+          console.log('ONNX policy ENABLED');
+        }
+      }
+
+      // R key: reset robot to home keyframe
+      if (e.code === 'KeyR') {
+        this.resetToHome();
+      }
+
       this.updateRobotCommand();
     });
     document.addEventListener('keyup', (e) => {
       this.keysPressed[e.code] = false;
       this.updateRobotCommand();
     });
+  }
+
+  resetToHome() {
+    if (this.model.nkey > 0) {
+      const nq = this.model.nq;
+      const nv = this.model.nv;
+      this.data.qpos.set(this.model.key_qpos.slice(0, nq));
+      for (let i = 0; i < nv; i++) this.data.qvel[i] = 0;
+      if (this.model.key_ctrl) {
+        this.data.ctrl.set(this.model.key_ctrl.slice(0, this.model.nu));
+      }
+      this.mujoco.mj_forward(this.model, this.data);
+      if (this.onnxController) this.onnxController.reset();
+      console.log('Reset to home keyframe');
+    }
   }
 
   updateRobotCommand() {

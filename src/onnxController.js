@@ -206,17 +206,19 @@ export class OnnxController {
   }
 
   getActuatorJointsQpos() {
+    // qpos layout: [0:7]=freejoint, [7:7+nu]=hinge joints (matching actuator order)
     const angles = new Float32Array(this.numDofs);
     for (let i = 0; i < this.numDofs; i++) {
-      angles[i] = this.data.qpos[7 + i] || 0;
+      angles[i] = this.data.qpos[7 + i];
     }
     return angles;
   }
 
   getActuatorJointsQvel() {
+    // qvel layout: [0:6]=freejoint, [6:6+nu]=hinge velocities (matching actuator order)
     const vels = new Float32Array(this.numDofs);
     for (let i = 0; i < this.numDofs; i++) {
-      vels[i] = this.data.qvel[6 + i] || 0;
+      vels[i] = this.data.qvel[6 + i];
     }
     return vels;
   }
@@ -329,13 +331,42 @@ export class OnnxController {
       return;
     }
 
-    // Diagnostic logging for first 20 policy steps
+    // Comprehensive diagnostic for first policy step
+    if (this.policyStepCount === 1) {
+      console.log('=== FIRST POLICY STEP DIAGNOSTIC ===');
+      console.log(`Base pos: [${Array.from(this.data.qpos).slice(0,3).map(v=>v.toFixed(4))}]`);
+      console.log(`Base quat: [${Array.from(this.data.qpos).slice(3,7).map(v=>v.toFixed(4))}]`);
+      console.log(`Joint qpos: [${Array.from(this.data.qpos).slice(7,21).map(v=>v.toFixed(4))}]`);
+      console.log(`Joint qvel: [${Array.from(this.data.qvel).slice(6,20).map(v=>v.toFixed(4))}]`);
+      const gyro = this.getGyro();
+      const accel = this.getAccelerometer();
+      const contacts = this.getFeetContacts();
+      const jointAngles = this.getActuatorJointsQpos();
+      console.log(`Gyro (raw): [${gyro.map(v=>v.toFixed(4))}]`);
+      console.log(`Accel (with +1.3 bias): [${accel.map(v=>v.toFixed(4))}]`);
+      console.log(`Commands: [${this.commands.map(v=>v.toFixed(3))}]`);
+      console.log(`Joint angles - default: [${Array.from(jointAngles).map((v,i)=>(v-this.defaultActuator[i]).toFixed(4))}]`);
+      console.log(`Contacts: [${contacts}]  ncon=${this.data.ncon}`);
+      console.log(`Phase: [${this.imitationPhase.map(v=>v.toFixed(4))}]  nbStepsInPeriod=${this.nbStepsInPeriod}`);
+      console.log(`Motor targets: [${Array.from(this.motorTargets).map(v=>v.toFixed(3))}]`);
+      console.log(`Obs length: ${obs.length} (expected: 101)`);
+      console.log(`Obs[0:6] gyro+accel: [${Array.from(obs).slice(0,6).map(v=>v.toFixed(4))}]`);
+      console.log(`Obs[6:13] commands: [${Array.from(obs).slice(6,13).map(v=>v.toFixed(4))}]`);
+      console.log(`Obs[13:27] joint_err: [${Array.from(obs).slice(13,27).map(v=>v.toFixed(4))}]`);
+      console.log(`Obs[27:41] joint_vel: [${Array.from(obs).slice(27,41).map(v=>v.toFixed(4))}]`);
+      console.log(`Obs[41:55] last_act: [${Array.from(obs).slice(41,55).map(v=>v.toFixed(4))}]`);
+      console.log(`Obs[55:69] last2_act: [${Array.from(obs).slice(55,69).map(v=>v.toFixed(4))}]`);
+      console.log(`Obs[69:83] last3_act: [${Array.from(obs).slice(69,83).map(v=>v.toFixed(4))}]`);
+      console.log(`Obs[83:97] motor_tgt: [${Array.from(obs).slice(83,97).map(v=>v.toFixed(4))}]`);
+      console.log(`Obs[97:101] contacts+phase: [${Array.from(obs).slice(97,101).map(v=>v.toFixed(4))}]`);
+      console.log('=== END DIAGNOSTIC ===');
+    }
+
+    // Brief logging for first 20 policy steps
     if (this.policyStepCount <= 20) {
       const baseH = (this.data.qpos[2] || 0).toFixed(4);
-      const gyro = this.getGyro().map(v => v.toFixed(3));
-      const accel = this.getAccelerometer().map(v => v.toFixed(3));
       const contacts = this.getFeetContacts();
-      console.log(`[Policy #${this.policyStepCount}] baseH=${baseH} gyro=[${gyro}] accel=[${accel}] contacts=[${contacts}] phase=[${this.imitationPhase.map(v=>v.toFixed(3))}] obs_len=${obs.length}`);
+      console.log(`[Policy #${this.policyStepCount}] H=${baseH} contacts=[${contacts}] ncon=${this.data.ncon}`);
     }
 
     // 3. Run ONNX inference (synchronous via await)
@@ -350,10 +381,15 @@ export class OnnxController {
 
       const action = new Float32Array(output.data);
 
-      // Diagnostic logging for first 20 steps
+      // Check if actions are in expected range (tanh should give [-1,1])
+      const maxAct = Math.max(...action);
+      const minAct = Math.min(...action);
       if (this.policyStepCount <= 20) {
         const actStr = Array.from(action).map(v => v.toFixed(3));
-        console.log(`  action=[${actStr}] shape=[${output.dims}]`);
+        console.log(`  action=[${actStr}] range=[${minAct.toFixed(3)}, ${maxAct.toFixed(3)}] dims=[${output.dims}]`);
+        if (maxAct > 1.0 || minAct < -1.0) {
+          console.warn('  WARNING: Actions outside [-1,1] - tanh may not be in ONNX graph!');
+        }
       }
 
       // 4. Update action history AFTER obs and inference (matches Python)

@@ -44,9 +44,10 @@ export class OnnxController {
     // Commands [lin_vel_x, lin_vel_y, ang_vel, neck_pitch, head_pitch, head_yaw, head_roll]
     this.commands = [0, 0, 0, 0, 0, 0, 0];
 
-    // Imitation phase (updated before first obs, so initial value doesn't matter)
+    // Imitation phase: period=0.54s, fps=50Hz → nb_steps_in_period=27
+    // Verified from upstream polynomial_coefficients.pkl data
     this.imitationI = 0;
-    this.nbStepsInPeriod = 50;
+    this.nbStepsInPeriod = 27;
     this.imitationPhase = [0, 0];
 
     // Step counter - incremented AFTER each mj_step (matches Python)

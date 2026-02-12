@@ -40,12 +40,7 @@ export class MuJoCoDemo {
     this.cameraOffset = new THREE.Vector3(0.5, 0.4, 0.5);
     this.dragForceScale = 2000;
     this.policyAutoPausedForDrag = false;
-    this.startupLiftStepsRemaining = 0;
-    this.startupLiftForceZ = 28.0;
     this.startupLiftBodyId = -1;
-    this.recoveryMode = false;
-    this.recoveryStepCount = 0;
-    this.recoveryStableSteps = 0;
     this.fallStepCount = 0;
 
     this.container = document.createElement( 'div' );
@@ -228,10 +223,6 @@ export class MuJoCoDemo {
         this.onnxController.enabled = true;
         this.updatePolicyUI();
       }
-      this.startupLiftStepsRemaining = 900; // ~1.8s at dt=0.002
-      this.recoveryMode = false;
-      this.recoveryStepCount = 0;
-      this.recoveryStableSteps = 0;
       this.fallStepCount = 0;
       // Reset timing to avoid burst of steps
       this.lastRenderTime = undefined;
@@ -332,7 +323,6 @@ export class MuJoCoDemo {
 
     // Initialize ONNX controller
     await this.initOnnxController();
-    this.startupLiftStepsRemaining = 900;
 
     this.gui = new GUI();
     setupGUI(this);
@@ -459,75 +449,18 @@ export class MuJoCoDemo {
           mujoco.mj_applyFT(this.model, this.data, [force.x, force.y, force.z], [0, 0, 0], [point.x, point.y, point.z], bodyID, this.data.qfrc_applied);
         }
 
-        // Physics step
-        if (
-          this.startupLiftStepsRemaining > 0 &&
-          this.onnxController &&
-          this.onnxController.enabled &&
-          this.startupLiftBodyId >= 0
-        ) {
-          const k = this.startupLiftStepsRemaining / 900.0;
-          const fz = this.startupLiftForceZ * Math.max(0.0, Math.min(1.0, k));
-          const adr = this.startupLiftBodyId * 3;
-          const point = [
-            this.data.xipos[adr + 0],
-            this.data.xipos[adr + 1],
-            this.data.xipos[adr + 2]
-          ];
-          mujoco.mj_applyFT(
-            this.model, this.data,
-            [0.0, 0.0, fz], [0.0, 0.0, 0.0], point,
-            this.startupLiftBodyId, this.data.qfrc_applied
-          );
-          this.startupLiftStepsRemaining--;
-        }
-
         const fallen = this.isRobotFallen();
         this.fallStepCount = fallen ? this.fallStepCount + 1 : 0;
-        if (!this.recoveryMode && this.fallStepCount > 15) {
-          this.recoveryMode = true;
-          this.recoveryStepCount = 0;
-          this.recoveryStableSteps = 0;
-          if (this.onnxController) {
-            this.onnxController.enabled = false;
-            this.updatePolicyUI();
-          }
-        }
-
-        if (this.recoveryMode) {
-          this.recoveryStepCount++;
-          if (this.model.key_ctrl) {
-            this.data.ctrl.set(this.model.key_ctrl.slice(0, this.model.nu));
-          }
-          if (this.startupLiftBodyId >= 0) {
-            const adr = this.startupLiftBodyId * 3;
-            const point = [this.data.xipos[adr + 0], this.data.xipos[adr + 1], this.data.xipos[adr + 2]];
-            mujoco.mj_applyFT(this.model, this.data, [0, 0, 45], [0, 0, 0], point, this.startupLiftBodyId, this.data.qfrc_applied);
-          }
-          if (!fallen && (this.data.qpos[2] || 0) > 0.13) {
-            this.recoveryStableSteps++;
-          } else {
-            this.recoveryStableSteps = 0;
-          }
-          if (this.recoveryStableSteps > 25) {
-            this.recoveryMode = false;
-            this.fallStepCount = 0;
-            if (this.onnxController) {
-              this.onnxController.reset();
-              this.onnxController.enabled = true;
-              this.updatePolicyUI();
-            }
-          } else if (this.recoveryStepCount > 240) {
-            this.resetToHome();
-            this.recoveryMode = false;
-          }
+        if (this.fallStepCount > 15) {
+          this.fallStepCount = 0;
+          this.resetToHome();
         }
 
         mujoco.mj_step(this.model, this.data);
         this.accumulator -= timestepMs;
 
         // Run policy synchronously at decimation boundary
-        if (!this.recoveryMode && this.onnxController && this.onnxController.enabled && this.onnxController.session) {
+        if (this.onnxController && this.onnxController.enabled && this.onnxController.session) {
           this.onnxController.stepCounter++;
           if (this.onnxController.stepCounter % this.onnxController.decimation === 0) {
             await this.onnxController.runPolicy();

@@ -165,7 +165,7 @@ export class MuJoCoDemo {
       },
       headDown: () => {
         if (this.onnxController) {
-          this.onnxController.commands[3] = Math.max(0.0, this.onnxController.commands[3] - 0.1);
+          this.onnxController.commands[3] = Math.max(0.2, this.onnxController.commands[3] - 0.1);
         }
       }
     };
@@ -230,11 +230,11 @@ export class MuJoCoDemo {
 
   updateRobotCommand() {
     // WASD / Arrow keys for movement
-    // Default: conservative forward walk for stability
-    let x = 0.06, y = 0, rot = 0;
+    // Default: very slow forward walk for stability
+    let x = 0.02, y = 0, rot = 0;
 
-    if (this.keysPressed['KeyW'] || this.keysPressed['ArrowUp']) x = 0.10;
-    if (this.keysPressed['KeyS'] || this.keysPressed['ArrowDown']) x = -0.15;
+    if (this.keysPressed['KeyW'] || this.keysPressed['ArrowUp']) x = 0.08;
+    if (this.keysPressed['KeyS'] || this.keysPressed['ArrowDown']) x = -0.08;
     if (this.keysPressed['KeyA'] || this.keysPressed['ArrowLeft']) y += 0.15;
     if (this.keysPressed['KeyD'] || this.keysPressed['ArrowRight']) y -= 0.15;
     if (this.keysPressed['KeyQ']) rot += 0.5;
@@ -246,7 +246,7 @@ export class MuJoCoDemo {
         this.onnxController.commands[3] = Math.min(1.0, this.onnxController.commands[3] + 0.02);
       }
       if (this.keysPressed['Digit2']) {
-        this.onnxController.commands[3] = Math.max(0.0, this.onnxController.commands[3] - 0.02);
+        this.onnxController.commands[3] = Math.max(0.2, this.onnxController.commands[3] - 0.02);
       }
     }
 

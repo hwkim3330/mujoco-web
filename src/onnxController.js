@@ -43,10 +43,10 @@ export class OnnxController {
 
     // Commands [lin_vel_x, lin_vel_y, ang_vel, neck_pitch, head_pitch, head_yaw, head_roll]
     this.commands = [0, 0, 0, 0, 0, 0, 0];
-    this.defaultForwardCommand = 0.06;
-    this.defaultNeckPitchCommand = 0.35;
-    this.startupNeckPitchCommand = 0.6;
-    this.startupAssistDuration = 1.2;
+    this.defaultForwardCommand = 0.02;
+    this.defaultNeckPitchCommand = 0.45;
+    this.startupNeckPitchCommand = 0.75;
+    this.startupAssistDuration = 2.2;
 
     // Imitation phase: period=0.54s, fps=50Hz → nb_steps_in_period=27
     // Verified from upstream polynomial_coefficients.pkl data
@@ -427,13 +427,16 @@ export class OnnxController {
 
     // Startup assist: keep neck up briefly, then smoothly blend to cruise command.
     const simTime = this.stepCounter * this.simDt;
+    const q = this.data.qpos;
+    const pitchDeg = Math.asin(2 * (q[3] * q[5] - q[6] * q[4])) * 180 / Math.PI;
+    const backLeanAssist = Math.max(0, Math.min(0.25, (-pitchDeg - 3) * 0.01));
+    let neckTarget = this.defaultNeckPitchCommand + backLeanAssist;
     if (simTime < this.startupAssistDuration) {
       const a = simTime / this.startupAssistDuration;
       const blended = this.startupNeckPitchCommand * (1 - a) + this.defaultNeckPitchCommand * a;
-      this.commands[3] = Math.max(this.commands[3], blended);
-    } else {
-      this.commands[3] = Math.max(this.commands[3], this.defaultNeckPitchCommand);
+      neckTarget = Math.max(neckTarget, blended + backLeanAssist);
     }
+    this.commands[3] = Math.max(this.defaultNeckPitchCommand, Math.min(0.9, Math.max(this.commands[3], neckTarget)));
 
     // 1. Update imitation phase (matches Python: increment BEFORE obs)
     this.imitationI = (this.imitationI + 1) % this.nbStepsInPeriod;

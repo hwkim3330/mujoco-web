@@ -230,8 +230,8 @@ export class MuJoCoDemo {
 
   updateRobotCommand() {
     // WASD / Arrow keys for movement
-    // Default: very slow forward walk for stability
-    let x = 0.02, y = 0, rot = 0;
+    // Default: stand still for stable startup; user can press W to move.
+    let x = 0.0, y = 0, rot = 0;
 
     if (this.keysPressed['KeyW'] || this.keysPressed['ArrowUp']) x = 0.08;
     if (this.keysPressed['KeyS'] || this.keysPressed['ArrowDown']) x = -0.08;

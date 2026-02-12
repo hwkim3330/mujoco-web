@@ -43,9 +43,9 @@ export class OnnxController {
 
     // Commands [lin_vel_x, lin_vel_y, ang_vel, neck_pitch, head_pitch, head_yaw, head_roll]
     this.commands = [0, 0, 0, 0, 0, 0, 0];
-    this.defaultForwardCommand = 0.02;
-    this.defaultNeckPitchCommand = 0.45;
-    this.startupNeckPitchCommand = 0.75;
+    this.defaultForwardCommand = 0.0;
+    this.defaultNeckPitchCommand = 0.55;
+    this.startupNeckPitchCommand = 0.8;
     this.startupAssistDuration = 2.2;
 
     // Imitation phase: period=0.54s, fps=50Hz → nb_steps_in_period=27
@@ -512,6 +512,11 @@ export class OnnxController {
       for (let i = 0; i < this.numDofs; i++) {
         this.motorTargets[i] = this.defaultActuator[i] + action[i] * this.actionScale;
       }
+
+      // Hard safety floor for neck/head targets to avoid immediate backward collapse.
+      // actuator order: ... neck_pitch(5), head_pitch(6), ...
+      this.motorTargets[5] = Math.max(this.motorTargets[5], this.defaultNeckPitchCommand);
+      this.motorTargets[6] = Math.max(this.motorTargets[6], 0.1);
 
       // 6. Velocity clamp (matches Python np.clip)
       for (let i = 0; i < this.numDofs; i++) {

@@ -247,9 +247,11 @@ export class OnnxController {
   }
 
   getAccelerometer() {
-    // Match Python: accelerometer[0] += 1.3
+    // Training code (JAX) has a bug: accelerometer.at[0].set(accel[0]+1.3) is a no-op
+    // because JAX arrays are immutable and the return value is discarded.
+    // So the ONNX model was trained WITHOUT the +1.3 bias. Match training here.
     return [
-      this.data.sensordata[this.accelAddr] + 1.3,
+      this.data.sensordata[this.accelAddr],
       this.data.sensordata[this.accelAddr + 1],
       this.data.sensordata[this.accelAddr + 2]
     ];

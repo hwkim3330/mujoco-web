@@ -191,6 +191,23 @@ export class MuJoCoDemo {
     [this.model, this.data, this.bodies, this.lights] =
       await loadSceneFromURL(mujoco, defaultScene, this);
 
+    // Match Python: explicitly set timestep
+    this.model.opt.timestep = 0.002;
+
+    // Ensure actuators are position servos (biastype=affine)
+    // The XML uses <position class="sts3215"> but the sts3215 class has
+    // <general biastype="none"> which may override the position shortcut.
+    // Force biastype=1 (affine) with correct biasprm for position control.
+    for (let i = 0; i < this.model.nu; i++) {
+      if (this.model.actuator_biastype) {
+        const kp = this.model.actuator_gainprm[i * 10];
+        this.model.actuator_biastype[i] = 1; // affine
+        this.model.actuator_biasprm[i * 10 + 0] = 0;
+        this.model.actuator_biasprm[i * 10 + 1] = -kp;
+        this.model.actuator_biasprm[i * 10 + 2] = 0;
+      }
+    }
+
     // Apply home keyframe for OpenDuck
     if (this.model.nkey > 0) {
       const nq = this.model.nq;

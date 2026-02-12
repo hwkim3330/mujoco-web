@@ -89,6 +89,7 @@ export class OnnxController {
       this.findSensorAddresses();
       this.findBodyIds();
       this.findJointIndices();
+      this.logActuatorDiagnostics();
 
       return true;
     } catch (e) {
@@ -232,6 +233,44 @@ export class OnnxController {
     console.log('Joint qvel indices:', Array.from(this.qvelIndices));
   }
 
+  logActuatorDiagnostics() {
+    // Check actuator model: biastype=1 (affine) means position servo, 0 (none) means torque
+    const n = this.numDofs;
+    try {
+      if (this.model.actuator_biastype) {
+        console.log('=== ACTUATOR DIAGNOSTICS ===');
+        console.log('biastype:', Array.from(this.model.actuator_biastype).slice(0, n),
+          '(0=none/torque, 1=affine/position)');
+      }
+      if (this.model.actuator_gainprm) {
+        const gains = [];
+        for (let i = 0; i < n; i++) gains.push(this.model.actuator_gainprm[i * 10]);
+        console.log('gainprm[0] (kp):', gains.map(v => v.toFixed(2)));
+      }
+      if (this.model.actuator_biasprm) {
+        const biases = [];
+        for (let i = 0; i < n; i++) {
+          biases.push([
+            this.model.actuator_biasprm[i * 10],
+            this.model.actuator_biasprm[i * 10 + 1],
+            this.model.actuator_biasprm[i * 10 + 2]
+          ]);
+        }
+        console.log('biasprm[0:3]:', biases.map(b => `[${b.map(v=>v.toFixed(2))}]`));
+      }
+      if (this.model.actuator_forcerange) {
+        console.log('forcerange[0]:', [
+          this.model.actuator_forcerange[0],
+          this.model.actuator_forcerange[1]
+        ].map(v => v.toFixed(2)));
+      }
+      console.log('opt.timestep:', this.model.opt.timestep);
+      console.log('=== END ACTUATOR DIAGNOSTICS ===');
+    } catch (e) {
+      console.warn('Actuator diagnostics failed:', e);
+    }
+  }
+
   setCommand(linX, linY, angZ) {
     this.commands[0] = Math.max(-0.15, Math.min(0.15, linX));
     this.commands[1] = Math.max(-0.2, Math.min(0.2, linY));
@@ -247,11 +286,9 @@ export class OnnxController {
   }
 
   getAccelerometer() {
-    // Training code (JAX) has a bug: accelerometer.at[0].set(accel[0]+1.3) is a no-op
-    // because JAX arrays are immutable and the return value is discarded.
-    // So the ONNX model was trained WITHOUT the +1.3 bias. Match training here.
+    // Match Python inference: accelerometer[0] += 1.3
     return [
-      this.data.sensordata[this.accelAddr],
+      this.data.sensordata[this.accelAddr] + 1.3,
       this.data.sensordata[this.accelAddr + 1],
       this.data.sensordata[this.accelAddr + 2]
     ];

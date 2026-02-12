@@ -133,7 +133,11 @@ export class OnnxController {
       ctrl[i] = this.motorTargets[i];
     }
 
+    // Start with a small forward velocity so the duck walks automatically
+    this.commands[0] = 0.1;
+
     console.log('Default actuator:', Array.from(this.defaultActuator).map(v => v.toFixed(3)));
+    console.log('Default command: forward velocity =', this.commands[0]);
   }
 
   findSensorAddresses() {
@@ -234,37 +238,48 @@ export class OnnxController {
   }
 
   logActuatorDiagnostics() {
-    // Check actuator model: biastype=1 (affine) means position servo, 0 (none) means torque
     const n = this.numDofs;
     try {
+      console.log('=== ACTUATOR DIAGNOSTICS ===');
+      console.log('timestep:', this.model.opt.timestep, '| nu:', n);
+
       if (this.model.actuator_biastype) {
-        console.log('=== ACTUATOR DIAGNOSTICS ===');
-        console.log('biastype:', Array.from(this.model.actuator_biastype).slice(0, n),
-          '(0=none/torque, 1=affine/position)');
+        const bt = Array.from(this.model.actuator_biastype).slice(0, n);
+        console.log('biastype:', bt, '(0=none, 1=affine/position)');
+
+        // CRITICAL: <position> shortcut MUST have biastype=1 (affine).
+        // mujoco-js may not compile this correctly. Fix if needed.
+        const needsFix = bt.some(v => v === 0);
+        if (needsFix) {
+          console.warn('WARNING: biastype=0 detected for position actuators. Fixing to affine...');
+          for (let i = 0; i < n; i++) {
+            if (this.model.actuator_biastype[i] === 0) {
+              const kp = this.model.actuator_gainprm[i * 10] || 13.37;
+              this.model.actuator_biastype[i] = 1; // affine
+              this.model.actuator_biasprm[i * 10 + 0] = 0;
+              this.model.actuator_biasprm[i * 10 + 1] = -kp;
+              this.model.actuator_biasprm[i * 10 + 2] = 0;
+            }
+          }
+          // Verify
+          const btAfter = Array.from(this.model.actuator_biastype).slice(0, n);
+          console.log('biastype after fix:', btAfter);
+          const bp1 = [];
+          for (let i = 0; i < n; i++) bp1.push(this.model.actuator_biasprm[i * 10 + 1].toFixed(2));
+          console.log('biasprm[1] after fix:', bp1);
+        }
       }
+
       if (this.model.actuator_gainprm) {
         const gains = [];
         for (let i = 0; i < n; i++) gains.push(this.model.actuator_gainprm[i * 10]);
         console.log('gainprm[0] (kp):', gains.map(v => v.toFixed(2)));
       }
-      if (this.model.actuator_biasprm) {
-        const biases = [];
-        for (let i = 0; i < n; i++) {
-          biases.push([
-            this.model.actuator_biasprm[i * 10],
-            this.model.actuator_biasprm[i * 10 + 1],
-            this.model.actuator_biasprm[i * 10 + 2]
-          ]);
-        }
-        console.log('biasprm[0:3]:', biases.map(b => `[${b.map(v=>v.toFixed(2))}]`));
-      }
+
       if (this.model.actuator_forcerange) {
-        console.log('forcerange[0]:', [
-          this.model.actuator_forcerange[0],
-          this.model.actuator_forcerange[1]
-        ].map(v => v.toFixed(2)));
+        console.log('forcerange[0]:', this.model.actuator_forcerange[0].toFixed(2),
+          this.model.actuator_forcerange[1].toFixed(2));
       }
-      console.log('opt.timestep:', this.model.opt.timestep);
       console.log('=== END ACTUATOR DIAGNOSTICS ===');
     } catch (e) {
       console.warn('Actuator diagnostics failed:', e);
@@ -420,43 +435,24 @@ export class OnnxController {
       return;
     }
 
-    // Comprehensive diagnostic for first policy step
+    // Diagnostic for first policy step
     if (this.policyStepCount === 1) {
-      console.log('=== FIRST POLICY STEP DIAGNOSTIC ===');
-      console.log(`Base pos: [${Array.from(this.data.qpos).slice(0,3).map(v=>v.toFixed(4))}]`);
-      console.log(`Base quat: [${Array.from(this.data.qpos).slice(3,7).map(v=>v.toFixed(4))}]`);
-      console.log(`Joint qpos: [${Array.from(this.data.qpos).slice(7,21).map(v=>v.toFixed(4))}]`);
-      console.log(`Joint qvel: [${Array.from(this.data.qvel).slice(6,20).map(v=>v.toFixed(4))}]`);
-      const gyro = this.getGyro();
-      const accel = this.getAccelerometer();
+      const quat = Array.from(this.data.qpos).slice(3,7);
       const contacts = this.getFeetContacts();
-      const jointAngles = this.getActuatorJointsQpos();
-      console.log(`Gyro (raw): [${gyro.map(v=>v.toFixed(4))}]`);
-      console.log(`Accel (with +1.3 bias): [${accel.map(v=>v.toFixed(4))}]`);
+      console.log('=== FIRST POLICY STEP ===');
+      console.log(`Pos: [${Array.from(this.data.qpos).slice(0,3).map(v=>v.toFixed(4))}]`);
+      console.log(`Quat: [${quat.map(v=>v.toFixed(4))}]`);
+      console.log(`Contacts: [${contacts}] ncon=${this.data.ncon}`);
       console.log(`Commands: [${this.commands.map(v=>v.toFixed(3))}]`);
-      console.log(`Joint angles - default: [${Array.from(jointAngles).map((v,i)=>(v-this.defaultActuator[i]).toFixed(4))}]`);
-      console.log(`Contacts: [${contacts}]  ncon=${this.data.ncon}`);
-      console.log(`Phase: [${this.imitationPhase.map(v=>v.toFixed(4))}]  nbStepsInPeriod=${this.nbStepsInPeriod}`);
-      console.log(`Motor targets: [${Array.from(this.motorTargets).map(v=>v.toFixed(3))}]`);
-      console.log(`Obs length: ${obs.length} (expected: 101)`);
-      console.log(`Obs[0:6] gyro+accel: [${Array.from(obs).slice(0,6).map(v=>v.toFixed(4))}]`);
-      console.log(`Obs[6:13] commands: [${Array.from(obs).slice(6,13).map(v=>v.toFixed(4))}]`);
-      console.log(`Obs[13:27] joint_err: [${Array.from(obs).slice(13,27).map(v=>v.toFixed(4))}]`);
-      console.log(`Obs[27:41] joint_vel: [${Array.from(obs).slice(27,41).map(v=>v.toFixed(4))}]`);
-      console.log(`Obs[41:55] last_act: [${Array.from(obs).slice(41,55).map(v=>v.toFixed(4))}]`);
-      console.log(`Obs[55:69] last2_act: [${Array.from(obs).slice(55,69).map(v=>v.toFixed(4))}]`);
-      console.log(`Obs[69:83] last3_act: [${Array.from(obs).slice(69,83).map(v=>v.toFixed(4))}]`);
-      console.log(`Obs[83:97] motor_tgt: [${Array.from(obs).slice(83,97).map(v=>v.toFixed(4))}]`);
-      console.log(`Obs[97:101] contacts+phase: [${Array.from(obs).slice(97,101).map(v=>v.toFixed(4))}]`);
-      console.log('=== END DIAGNOSTIC ===');
+      console.log(`Obs length: ${obs.length}`);
+      console.log('========================');
     }
 
-    // Brief logging for first 50 policy steps
-    if (this.policyStepCount <= 50) {
-      const baseX = (this.data.qpos[0] || 0).toFixed(4);
-      const baseH = (this.data.qpos[2] || 0).toFixed(4);
+    // Brief logging for first 10 policy steps
+    if (this.policyStepCount <= 10) {
+      const h = (this.data.qpos[2] || 0).toFixed(4);
       const contacts = this.getFeetContacts();
-      console.log(`[Policy #${this.policyStepCount}] X=${baseX} H=${baseH} contacts=[${contacts}] ncon=${this.data.ncon}`);
+      console.log(`[Policy #${this.policyStepCount}] H=${h} contacts=[${contacts}] cmd=[${this.commands[0].toFixed(2)},${this.commands[1].toFixed(2)}]`);
     }
 
     // 3. Run ONNX inference (synchronous via await)
@@ -472,14 +468,10 @@ export class OnnxController {
       const action = new Float32Array(output.data);
 
       // Check if actions are in expected range (tanh should give [-1,1])
-      const maxAct = Math.max(...action);
-      const minAct = Math.min(...action);
-      if (this.policyStepCount <= 5) {
-        const actStr = Array.from(action).map(v => v.toFixed(3));
-        console.log(`  action=[${actStr}] range=[${minAct.toFixed(3)}, ${maxAct.toFixed(3)}]`);
-        if (maxAct > 1.0 || minAct < -1.0) {
-          console.warn('  WARNING: Actions outside [-1,1] - tanh may not be in ONNX graph!');
-        }
+      if (this.policyStepCount <= 3) {
+        const maxAct = Math.max(...action);
+        const minAct = Math.min(...action);
+        console.log(`  action range=[${minAct.toFixed(3)}, ${maxAct.toFixed(3)}]`);
       }
 
       // 4. Update action history AFTER obs and inference (matches Python)
@@ -508,7 +500,7 @@ export class OnnxController {
         ctrl[i] = this.motorTargets[i];
       }
 
-      if (this.policyStepCount <= 5) {
+      if (this.policyStepCount <= 3) {
         const ctrlStr = Array.from(ctrl).slice(0, this.numDofs).map(v => v.toFixed(3));
         console.log(`  ctrl=[${ctrlStr}]`);
       }

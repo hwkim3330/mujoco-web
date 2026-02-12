@@ -163,10 +163,11 @@ export class MuJoCoDemo {
 
   updateRobotCommand() {
     // WASD / Arrow keys for movement
-    let x = 0, y = 0, rot = 0;
+    // Default: slow forward walk (0.1 m/s) when no keys pressed
+    let x = 0.1, y = 0, rot = 0;
 
-    if (this.keysPressed['KeyW'] || this.keysPressed['ArrowUp']) x += 0.15;
-    if (this.keysPressed['KeyS'] || this.keysPressed['ArrowDown']) x -= 0.15;
+    if (this.keysPressed['KeyW'] || this.keysPressed['ArrowUp']) x = 0.15;
+    if (this.keysPressed['KeyS'] || this.keysPressed['ArrowDown']) x = -0.15;
     if (this.keysPressed['KeyA'] || this.keysPressed['ArrowLeft']) y += 0.15;
     if (this.keysPressed['KeyD'] || this.keysPressed['ArrowRight']) y -= 0.15;
     if (this.keysPressed['KeyQ']) rot += 0.5;
@@ -190,23 +191,6 @@ export class MuJoCoDemo {
     // Initialize the three.js Scene using OpenDuck
     [this.model, this.data, this.bodies, this.lights] =
       await loadSceneFromURL(mujoco, defaultScene, this);
-
-    // Match Python: explicitly set timestep
-    this.model.opt.timestep = 0.002;
-
-    // Ensure actuators are position servos (biastype=affine)
-    // The XML uses <position class="sts3215"> but the sts3215 class has
-    // <general biastype="none"> which may override the position shortcut.
-    // Force biastype=1 (affine) with correct biasprm for position control.
-    for (let i = 0; i < this.model.nu; i++) {
-      if (this.model.actuator_biastype) {
-        const kp = this.model.actuator_gainprm[i * 10];
-        this.model.actuator_biastype[i] = 1; // affine
-        this.model.actuator_biasprm[i * 10 + 0] = 0;
-        this.model.actuator_biasprm[i * 10 + 1] = -kp;
-        this.model.actuator_biasprm[i * 10 + 2] = 0;
-      }
-    }
 
     // Apply home keyframe for OpenDuck
     if (this.model.nkey > 0) {
@@ -252,7 +236,7 @@ export class MuJoCoDemo {
       const loaded = await this.onnxController.loadModel('./assets/models/openduck_walk.onnx');
       if (loaded) {
         this.onnxController.enabled = true;
-        if (statusBar) statusBar.textContent = 'ONNX: active | WASD to walk';
+        if (statusBar) statusBar.textContent = 'ONNX: active | auto-walking | WASD to steer';
         if (statusBar) statusBar.style.color = '#0f0';
       }
     } catch (e) {

@@ -326,7 +326,18 @@ export class MuJoCoDemo {
     this.onnxController = new OnnxController(mujoco, this.model, this.data);
 
     try {
-      const loaded = await this.onnxController.loadModel('./assets/models/openduck_walk.onnx');
+      let loaded = false;
+      const modelCandidates = [
+        './assets/models/BEST_WALK_ONNX.onnx',
+        './assets/models/openduck_walk.onnx'
+      ];
+      for (const modelPath of modelCandidates) {
+        loaded = await this.onnxController.loadModel(modelPath);
+        if (loaded) {
+          console.log('Using ONNX model:', modelPath);
+          break;
+        }
+      }
       if (loaded) {
         this.onnxController.enabled = true;
         this.updatePolicyUI();

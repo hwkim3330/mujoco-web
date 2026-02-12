@@ -1,10 +1,10 @@
 
 import * as THREE           from 'three';
-import { GUI              } from '../node_modules/three/examples/jsm/libs/lil-gui.module.min.js';
-import { OrbitControls    } from '../node_modules/three/examples/jsm/controls/OrbitControls.js';
+import { GUI              } from 'three/addons/libs/lil-gui.module.min.js';
+import { OrbitControls    } from 'three/addons/controls/OrbitControls.js';
 import { DragStateManager } from './utils/DragStateManager.js';
 import { setupGUI, downloadExampleScenesFolder, loadSceneFromURL, drawTendonsAndFlex, getPosition, getQuaternion, toMujocoPos, standardNormal } from './mujocoUtils.js';
-import   load_mujoco        from '../node_modules/mujoco-js/dist/mujoco_wasm.js';
+import   load_mujoco        from 'https://cdn.jsdelivr.net/npm/mujoco-js@0.0.7/dist/mujoco_wasm.js';
 import { OnnxController   } from './onnxController.js';
 
 // Load the MuJoCo Module

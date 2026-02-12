@@ -40,6 +40,9 @@ export class MuJoCoDemo {
     this.cameraOffset = new THREE.Vector3(0.5, 0.4, 0.5);
     this.dragForceScale = 2000;
     this.policyAutoPausedForDrag = false;
+    this.startupLiftStepsRemaining = 0;
+    this.startupLiftForceZ = 28.0;
+    this.startupLiftBodyId = -1;
 
     this.container = document.createElement( 'div' );
     document.body.appendChild( this.container );
@@ -164,7 +167,7 @@ export class MuJoCoDemo {
       },
       headDown: () => {
         if (this.onnxController) {
-          this.onnxController.commands[3] = Math.max(0.3, this.onnxController.commands[3] - 0.1);
+          this.onnxController.commands[3] = Math.max(-0.2, this.onnxController.commands[3] - 0.1);
         }
       }
     };
@@ -221,6 +224,7 @@ export class MuJoCoDemo {
         this.onnxController.enabled = true;
         this.updatePolicyUI();
       }
+      this.startupLiftStepsRemaining = 900; // ~1.8s at dt=0.002
       // Reset timing to avoid burst of steps
       this.lastRenderTime = undefined;
       this.accumulator = 0;
@@ -231,7 +235,7 @@ export class MuJoCoDemo {
   updateRobotCommand() {
     // WASD / Arrow keys for movement
     // Default: conservative forward walk
-    let x = 0.04, y = 0, rot = 0;
+    let x = 0.03, y = 0, rot = 0;
 
     if (this.keysPressed['KeyW'] || this.keysPressed['ArrowUp']) x = 0.10;
     if (this.keysPressed['KeyS'] || this.keysPressed['ArrowDown']) x = -0.15;
@@ -246,7 +250,7 @@ export class MuJoCoDemo {
         this.onnxController.commands[3] = Math.min(1.0, this.onnxController.commands[3] + 0.02);
       }
       if (this.keysPressed['Digit2']) {
-        this.onnxController.commands[3] = Math.max(0.3, this.onnxController.commands[3] - 0.02);
+        this.onnxController.commands[3] = Math.max(-0.2, this.onnxController.commands[3] - 0.02);
       }
     }
 
@@ -312,6 +316,7 @@ export class MuJoCoDemo {
 
     // Initialize ONNX controller
     await this.initOnnxController();
+    this.startupLiftStepsRemaining = 900;
 
     this.gui = new GUI();
     setupGUI(this);
@@ -325,6 +330,12 @@ export class MuJoCoDemo {
       if (loaded) {
         this.onnxController.enabled = true;
         this.updatePolicyUI();
+        try {
+          // mjOBJ_BODY = 1
+          this.startupLiftBodyId = mujoco.mj_name2id(this.model, 1, 'trunk_assembly');
+        } catch (e) {
+          this.startupLiftBodyId = -1;
+        }
       }
     } catch (e) {
       console.warn('Failed to load ONNX model:', e);
@@ -422,6 +433,28 @@ export class MuJoCoDemo {
         }
 
         // Physics step
+        if (
+          this.startupLiftStepsRemaining > 0 &&
+          this.onnxController &&
+          this.onnxController.enabled &&
+          this.startupLiftBodyId >= 0
+        ) {
+          const k = this.startupLiftStepsRemaining / 900.0;
+          const fz = this.startupLiftForceZ * Math.max(0.0, Math.min(1.0, k));
+          const adr = this.startupLiftBodyId * 3;
+          const point = [
+            this.data.xipos[adr + 0],
+            this.data.xipos[adr + 1],
+            this.data.xipos[adr + 2]
+          ];
+          mujoco.mj_applyFT(
+            this.model, this.data,
+            [0.0, 0.0, fz], [0.0, 0.0, 0.0], point,
+            this.startupLiftBodyId, this.data.qfrc_applied
+          );
+          this.startupLiftStepsRemaining--;
+        }
+
         mujoco.mj_step(this.model, this.data);
         this.accumulator -= timestepMs;
 

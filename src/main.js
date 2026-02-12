@@ -40,7 +40,6 @@ export class MuJoCoDemo {
     this.cameraOffset = new THREE.Vector3(0.5, 0.4, 0.5);
     this.dragForceScale = 2000;
     this.policyAutoPausedForDrag = false;
-    this.fallRecoveryCounter = 0;
 
     this.container = document.createElement( 'div' );
     document.body.appendChild( this.container );
@@ -230,11 +229,11 @@ export class MuJoCoDemo {
 
   updateRobotCommand() {
     // WASD / Arrow keys for movement
-    // Default: stand still for stable startup; user can press W to move.
-    let x = 0.0, y = 0, rot = 0;
+    // Default: slow forward walk
+    let x = 0.06, y = 0, rot = 0;
 
-    if (this.keysPressed['KeyW'] || this.keysPressed['ArrowUp']) x = 0.08;
-    if (this.keysPressed['KeyS'] || this.keysPressed['ArrowDown']) x = -0.08;
+    if (this.keysPressed['KeyW'] || this.keysPressed['ArrowUp']) x = 0.12;
+    if (this.keysPressed['KeyS'] || this.keysPressed['ArrowDown']) x = -0.15;
     if (this.keysPressed['KeyA'] || this.keysPressed['ArrowLeft']) y += 0.15;
     if (this.keysPressed['KeyD'] || this.keysPressed['ArrowRight']) y -= 0.15;
     if (this.keysPressed['KeyQ']) rot += 0.5;
@@ -262,7 +261,7 @@ export class MuJoCoDemo {
     await downloadExampleScenesFolder(mujoco);
 
     // Load OpenDuck as default scene after files are ready
-    const defaultScene = "openduck/scene_flat_terrain.xml";
+    const defaultScene = "openduck/scene_flat_terrain_backlash.xml";
     this.params.scene = defaultScene;
 
     // Initialize the three.js Scene using OpenDuck
@@ -517,19 +516,6 @@ export class MuJoCoDemo {
       const baseZ = this.data.qpos[2];
       // Update orbit controls target to follow duck (swizzle Y/Z for three.js)
       this.controls.target.set(baseX, baseZ, -baseY);
-    }
-
-    // Fall recovery: if clearly fallen for consecutive frames, reset to home.
-    if (this.onnxController && this.onnxController.enabled && this.params.scene.includes('openduck')) {
-      const h = this.data.qpos[2] || 0;
-      const q = this.data.qpos;
-      const pitch = Math.asin(2 * (q[3] * q[5] - q[6] * q[4])) * 180 / Math.PI;
-      const fallen = h < 0.10 || Math.abs(pitch) > 60;
-      this.fallRecoveryCounter = fallen ? this.fallRecoveryCounter + 1 : 0;
-      if (this.fallRecoveryCounter > 20) {
-        this.fallRecoveryCounter = 0;
-        this.resetToHome();
-      }
     }
 
     // Draw Tendons and Flex verts

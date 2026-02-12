@@ -43,10 +43,10 @@ export class OnnxController {
 
     // Commands [lin_vel_x, lin_vel_y, ang_vel, neck_pitch, head_pitch, head_yaw, head_roll]
     this.commands = [0, 0, 0, 0, 0, 0, 0];
-    this.defaultForwardCommand = 0.0;
-    this.defaultNeckPitchCommand = 0.55;
-    this.startupNeckPitchCommand = 0.8;
-    this.startupAssistDuration = 2.2;
+    this.defaultForwardCommand = 0.06;
+    this.defaultNeckPitchCommand = 0.30;
+    this.startupNeckPitchCommand = 0.45;
+    this.startupAssistDuration = 1.2;
 
     // Imitation phase: period=0.54s, fps=50Hz → nb_steps_in_period=27
     // Verified from upstream polynomial_coefficients.pkl data
@@ -427,16 +427,13 @@ export class OnnxController {
 
     // Startup assist: keep neck up briefly, then smoothly blend to cruise command.
     const simTime = this.stepCounter * this.simDt;
-    const q = this.data.qpos;
-    const pitchDeg = Math.asin(2 * (q[3] * q[5] - q[6] * q[4])) * 180 / Math.PI;
-    const backLeanAssist = Math.max(0, Math.min(0.25, (-pitchDeg - 3) * 0.01));
-    let neckTarget = this.defaultNeckPitchCommand + backLeanAssist;
+    let neckTarget = this.defaultNeckPitchCommand;
     if (simTime < this.startupAssistDuration) {
       const a = simTime / this.startupAssistDuration;
       const blended = this.startupNeckPitchCommand * (1 - a) + this.defaultNeckPitchCommand * a;
-      neckTarget = Math.max(neckTarget, blended + backLeanAssist);
+      neckTarget = Math.max(neckTarget, blended);
     }
-    this.commands[3] = Math.max(this.defaultNeckPitchCommand, Math.min(0.9, Math.max(this.commands[3], neckTarget)));
+    this.commands[3] = Math.max(this.defaultNeckPitchCommand, Math.min(0.8, Math.max(this.commands[3], neckTarget)));
 
     // 1. Update imitation phase (matches Python: increment BEFORE obs)
     this.imitationI = (this.imitationI + 1) % this.nbStepsInPeriod;
@@ -512,11 +509,6 @@ export class OnnxController {
       for (let i = 0; i < this.numDofs; i++) {
         this.motorTargets[i] = this.defaultActuator[i] + action[i] * this.actionScale;
       }
-
-      // Hard safety floor for neck/head targets to avoid immediate backward collapse.
-      // actuator order: ... neck_pitch(5), head_pitch(6), ...
-      this.motorTargets[5] = Math.max(this.motorTargets[5], this.defaultNeckPitchCommand);
-      this.motorTargets[6] = Math.max(this.motorTargets[6], 0.1);
 
       // 6. Velocity clamp (matches Python np.clip)
       for (let i = 0; i < this.numDofs; i++) {

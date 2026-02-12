@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <title>OpenDuck Mini - Mobile</title>
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+        <meta name="application-name"   content="openduck_rl">
+        <meta name="description"        content="OpenDuck Mini walking with RL - Mobile Version">
+        <meta name="author"             content="hwkim3330">
+        <meta name="viewport"           content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover, user-scalable=no, shrink-to-fit=0">
+        <meta name="theme-color"        content="#1a2a3a">
+        <meta name="apple-mobile-web-app-capable" content="yes">
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+        <link rel="icon" type="image/x-icon" href="./assets/favicon.png">
+        <style>
+            * { box-sizing: border-box; margin: 0; padding: 0; }
+            html, body { width: 100%; height: 100%; overflow: hidden; }
+            body {
+                background: #1a2a3a;
+                touch-action: none;
+                -webkit-touch-callout: none;
+                -webkit-user-select: none;
+                user-select: none;
+                font-family: -apple-system, 'SF Pro', 'Helvetica Neue', sans-serif;
+                position: fixed;
+                width: 100%;
+                height: 100%;
+            }
+            h1 { display: none; }
+
+            /* Loading */
+            #loading-screen {
+                position: fixed; inset: 0;
+                background: #1a2a3a;
+                display: flex; flex-direction: column;
+                align-items: center; justify-content: center;
+                z-index: 1000; color: #fff;
+                font-family: -apple-system, sans-serif;
+                transition: opacity 0.5s;
+            }
+            #loading-screen.hidden { opacity: 0; pointer-events: none; }
+            .spinner {
+                width: 36px; height: 36px;
+                border: 3px solid rgba(255,255,255,0.15);
+                border-top-color: #4fc3f7;
+                border-radius: 50%;
+                animation: spin 0.8s linear infinite;
+                margin-bottom: 12px;
+            }
+            @keyframes spin { to { transform: rotate(360deg); } }
+
+            /* Top bar */
+            #topbar {
+                position: fixed; top: 0; left: 0; right: 0;
+                height: 44px;
+                background: rgba(10, 15, 25, 0.85);
+                backdrop-filter: blur(12px);
+                display: flex; align-items: center;
+                padding: 0 12px;
+                z-index: 100;
+                border-bottom: 1px solid rgba(255,255,255,0.06);
+                gap: 10px;
+                font-size: 12px; color: #ccc;
+                padding-top: env(safe-area-inset-top, 0);
+            }
+            .dot {
+                width: 7px; height: 7px;
+                border-radius: 50%; display: inline-block;
+                margin-right: 3px;
+            }
+            .dot.green { background: #4caf50; box-shadow: 0 0 4px #4caf50; }
+            .dot.yellow { background: #ffc107; box-shadow: 0 0 4px #ffc107; }
+            .lbl { color: #666; font-size: 10px; }
+            .val { color: #fff; font-weight: 600; }
+
+            /* Joystick */
+            #joystick-area {
+                position: fixed;
+                bottom: 24px; left: 24px;
+                width: 140px; height: 140px;
+                z-index: 100;
+            }
+            #joystick-base {
+                width: 140px; height: 140px;
+                background: rgba(255,255,255,0.06);
+                border: 2px solid rgba(255,255,255,0.12);
+                border-radius: 50%;
+                position: relative;
+            }
+            #joystick-knob {
+                width: 56px; height: 56px;
+                background: rgba(79, 195, 247, 0.35);
+                border: 2px solid rgba(79, 195, 247, 0.5);
+                border-radius: 50%;
+                position: absolute;
+                top: 50%; left: 50%;
+                transform: translate(-50%, -50%);
+                transition: transform 0.05s ease-out;
+            }
+            #joystick-label {
+                text-align: center;
+                color: #555; font-size: 10px;
+                margin-top: 4px; letter-spacing: 1px;
+            }
+
+            /* Right-side buttons */
+            #btn-area {
+                position: fixed;
+                bottom: 24px; right: 16px;
+                z-index: 100;
+                display: flex; flex-direction: column;
+                gap: 8px;
+                align-items: flex-end;
+            }
+            .mbtn {
+                padding: 12px 20px;
+                background: rgba(10, 15, 25, 0.8);
+                border: 1px solid rgba(255,255,255,0.12);
+                border-radius: 10px;
+                color: #ccc; font-size: 14px; font-weight: 600;
+                backdrop-filter: blur(8px);
+                cursor: pointer;
+                min-width: 80px; text-align: center;
+                transition: all 0.1s;
+                -webkit-tap-highlight-color: transparent;
+            }
+            .mbtn:active { background: rgba(79, 195, 247, 0.2); border-color: rgba(79, 195, 247, 0.4); color: #4fc3f7; }
+            .mbtn.on { background: rgba(76, 175, 80, 0.2); border-color: rgba(76, 175, 80, 0.4); color: #4caf50; }
+            .mbtn.off { background: rgba(255, 193, 7, 0.15); border-color: rgba(255, 193, 7, 0.3); color: #ffc107; }
+
+            /* Head control - left side above joystick */
+            #head-area {
+                position: fixed;
+                bottom: 180px; left: 24px;
+                z-index: 100;
+                display: flex; gap: 8px;
+            }
+            .head-btn {
+                width: 56px; height: 56px;
+                background: rgba(10, 15, 25, 0.8);
+                border: 1px solid rgba(255,255,255,0.12);
+                border-radius: 12px;
+                color: #aaa; font-size: 22px;
+                display: flex; align-items: center; justify-content: center;
+                backdrop-filter: blur(8px);
+                cursor: pointer;
+                -webkit-tap-highlight-color: transparent;
+            }
+            .head-btn:active { background: rgba(79, 195, 247, 0.2); color: #4fc3f7; }
+
+            /* Speed display - right side */
+            #speed-area {
+                position: fixed;
+                bottom: 180px; right: 16px;
+                z-index: 100;
+                text-align: center;
+                background: rgba(10, 15, 25, 0.8);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 12px;
+                padding: 10px 16px;
+                backdrop-filter: blur(8px);
+            }
+            #speed-area .slbl { color: #666; font-size: 9px; text-transform: uppercase; letter-spacing: 1px; }
+            #speed-area .sval { color: #4fc3f7; font-size: 22px; font-weight: 700; }
+            #speed-area .sunit { color: #555; font-size: 10px; }
+
+            /* Hide lil-gui */
+            .lil-gui { display: none !important; }
+        </style>
+    </head>
+
+    <body>
+        <h1 hidden></h1>
+
+        <!-- Loading -->
+        <div id="loading-screen">
+            <div class="spinner"></div>
+            <div style="font-size: 16px; font-weight: 600; color: #fff;">OpenDuck Mini</div>
+            <div style="margin-top: 8px; font-size: 12px; color: #888;">Loading MuJoCo + ONNX...</div>
+        </div>
+
+        <!-- Top Bar -->
+        <div id="topbar">
+            <span><span class="dot green" id="policy-dot"></span><span class="val" id="policy-label">ONNX</span></span>
+            <span><span class="lbl">H </span><span class="val" id="stat-height">--</span></span>
+            <span><span class="lbl">L </span><span class="val" id="stat-left">-</span><span class="lbl"> R </span><span class="val" id="stat-right">-</span></span>
+            <span><span class="lbl">neck </span><span class="val" id="stat-neck">0.3</span></span>
+            <span><span class="lbl">step </span><span class="val" id="stat-step">0</span></span>
+        </div>
+
+        <!-- Head Control -->
+        <div id="head-area">
+            <div class="head-btn" id="btn-head-up" ontouchstart="headUp(event)" ontouchend="stopRepeat(event)">&#9650;</div>
+            <div class="head-btn" id="btn-head-dn" ontouchstart="headDown(event)" ontouchend="stopRepeat(event)">&#9660;</div>
+        </div>
+
+        <!-- Joystick -->
+        <div id="joystick-area">
+            <div id="joystick-base">
+                <div id="joystick-knob"></div>
+            </div>
+            <div id="joystick-label">MOVE</div>
+        </div>
+
+        <!-- Speed -->
+        <div id="speed-area">
+            <div class="slbl">Speed</div>
+            <div><span class="sval" id="speed-value">0.10</span> <span class="sunit">m/s</span></div>
+        </div>
+
+        <!-- Buttons -->
+        <div id="btn-area">
+            <div class="mbtn on" id="btn-policy-mobile" ontouchstart="togglePolicy(event)">Policy ON</div>
+            <div class="mbtn" ontouchstart="resetPose(event)">Reset</div>
+            <div class="mbtn" ontouchstart="togglePause(event)" id="btn-pause">Pause</div>
+        </div>
+
+        <!-- Scripts -->
+        <script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.0/dist/ort.min.js"></script>
+        <script type="importmap">
+            { "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.181.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.181.0/examples/jsm/"
+            } }
+        </script>
+
+        <div id="appbody" style="position: absolute;">
+            <script type="module" src="./src/main.js"></script>
+        </div>
+
+        <!-- Global handlers -->
+        <script>
+            function togglePolicy(e) {
+                if (e) e.preventDefault();
+                if (window._demoActions) window._demoActions.togglePolicy();
+            }
+            function resetPose(e) {
+                if (e) e.preventDefault();
+                if (window._demoActions) window._demoActions.resetPose();
+            }
+            function togglePause(e) {
+                if (e) e.preventDefault();
+                if (window._demoActions) window._demoActions.togglePause();
+            }
+
+            let _headInterval = null;
+            function headUp(e) {
+                if (e) e.preventDefault();
+                if (window._demoActions) window._demoActions.headUp();
+                _headInterval = setInterval(() => {
+                    if (window._demoActions) window._demoActions.headUp();
+                }, 100);
+            }
+            function headDown(e) {
+                if (e) e.preventDefault();
+                if (window._demoActions) window._demoActions.headDown();
+                _headInterval = setInterval(() => {
+                    if (window._demoActions) window._demoActions.headDown();
+                }, 100);
+            }
+            function stopRepeat(e) {
+                if (e) e.preventDefault();
+                if (_headInterval) { clearInterval(_headInterval); _headInterval = null; }
+            }
+        </script>
+
+        <!-- Joystick Logic -->
+        <script>
+            document.addEventListener('DOMContentLoaded', () => {
+                const base = document.getElementById('joystick-base');
+                const knob = document.getElementById('joystick-knob');
+                if (!base || !knob) return;
+
+                let touching = false;
+                let touchId = null;
+                const maxDist = 42;
+
+                base.addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    touching = true;
+                    touchId = e.touches[0].identifier;
+                }, { passive: false });
+
+                document.addEventListener('touchmove', (e) => {
+                    if (!touching) return;
+                    let touch = null;
+                    for (let t of e.touches) {
+                        if (t.identifier === touchId) { touch = t; break; }
+                    }
+                    if (!touch) return;
+                    e.preventDefault();
+
+                    const rect = base.getBoundingClientRect();
+                    const cx = rect.left + rect.width / 2;
+                    const cy = rect.top + rect.height / 2;
+                    let dx = touch.clientX - cx;
+                    let dy = touch.clientY - cy;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    if (dist > maxDist) {
+                        dx = dx / dist * maxDist;
+                        dy = dy / dist * maxDist;
+                    }
+                    knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+
+                    // Forward/back = -dy, left/right = -dx
+                    const cmdX = -dy / maxDist * 0.15;
+                    const cmdY = -dx / maxDist * 0.2;
+                    window.dispatchEvent(new CustomEvent('joystick-move', {
+                        detail: { x: cmdX || 0.1, y: cmdY }
+                    }));
+                }, { passive: false });
+
+                const resetJoystick = () => {
+                    touching = false;
+                    touchId = null;
+                    knob.style.transform = 'translate(-50%, -50%)';
+                    window.dispatchEvent(new CustomEvent('joystick-move', { detail: { x: 0.1, y: 0 } }));
+                };
+
+                document.addEventListener('touchend', (e) => {
+                    for (let t of e.changedTouches) {
+                        if (t.identifier === touchId) { resetJoystick(); break; }
+                    }
+                });
+                document.addEventListener('touchcancel', resetJoystick);
+            });
+        </script>
+    </body>
+</html>

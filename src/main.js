@@ -393,12 +393,13 @@ export class MuJoCoDemo {
             if (this.bodies[b]) {
               getPosition  (this.data.xpos , b, this.bodies[b].position);
               getQuaternion(this.data.xquat, b, this.bodies[b].quaternion);
-              this.bodies[b].updateWorldMatrix();
             }
           }
+          // Propagate world matrices to child meshes so localToWorld is accurate
+          dragged.updateWorldMatrix(true, false);
           let bodyID = dragged.bodyID;
           this.dragStateManager.update();
-          let force = toMujocoPos(this.dragStateManager.currentWorld.clone().sub(this.dragStateManager.worldHit).multiplyScalar(this.model.body_mass[bodyID] * 250));
+          let force = toMujocoPos(this.dragStateManager.currentWorld.clone().sub(this.dragStateManager.worldHit).multiplyScalar(this.model.body_mass[bodyID] * 500));
           let point = toMujocoPos(this.dragStateManager.worldHit.clone());
           mujoco.mj_applyFT(this.model, this.data, [force.x, force.y, force.z], [0, 0, 0], [point.x, point.y, point.z], bodyID, this.data.qfrc_applied);
         }

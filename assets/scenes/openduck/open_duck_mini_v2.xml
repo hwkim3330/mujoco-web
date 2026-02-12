@@ -105,6 +105,9 @@
         <!-- Part wj_wk00_0124bottomcase_45_3 -->
         <!-- Part wj_wk00_0122topcabinetcase_95_3 -->
         <!-- Part passive_palonier_3 -->
+        <!-- Trunk collision geom (prevents body from clipping through floor) -->
+        <geom type="box" size="0.06 0.04 0.03" pos="-0.048 0 0.038"
+          contype="1" conaffinity="1" group="3" condim="3" rgba="0 0 0 0"/>
         <!-- Frame trunk -->
         <site group="0" name="trunk" pos="-0.024 -2.41127e-16 0.0881909" quat="1 -2.77556e-17 -0 -0"/>
         <!-- Frame imu -->
@@ -308,6 +311,9 @@
                 <!-- Part wj_wk00_0124bottomcase_45_10 -->
                 <!-- Part wj_wk00_0122topcabinetcase_95_10 -->
                 <!-- Part passive_palonier_10 -->
+                <!-- Head collision geom -->
+                <geom type="sphere" size="0.04" pos="0.02 0 0.03"
+                  contype="1" conaffinity="1" group="3" condim="3" rgba="0 0 0 0"/>
                 <!-- Frame head -->
                 <site group="0" name="head" pos="0.04245 1.88922e-17 0.03595"
                   quat="0.707107 2.48509e-16 0.707107 5.27356e-16"/>

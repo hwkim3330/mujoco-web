@@ -154,7 +154,17 @@ export class MuJoCoDemo {
     window._demoActions = {
       togglePolicy: () => this.togglePolicy(),
       resetPose: () => this.resetToHome(),
-      togglePause: () => { this.params.paused = !this.params.paused; }
+      togglePause: () => { this.params.paused = !this.params.paused; },
+      headUp: () => {
+        if (this.onnxController) {
+          this.onnxController.commands[3] = Math.min(1.0, this.onnxController.commands[3] + 0.1);
+        }
+      },
+      headDown: () => {
+        if (this.onnxController) {
+          this.onnxController.commands[3] = Math.max(-0.3, this.onnxController.commands[3] - 0.1);
+        }
+      }
     };
   }
 
@@ -199,6 +209,10 @@ export class MuJoCoDemo {
         this.data.ctrl.set(this.model.key_ctrl.slice(0, this.model.nu));
       }
       this.mujoco.mj_forward(this.model, this.data);
+      // Warm up physics to settle contacts
+      for (let i = 0; i < 100; i++) {
+        this.mujoco.mj_step(this.model, this.data);
+      }
       if (this.onnxController) {
         this.onnxController.reset();
         this.onnxController.enabled = true;
@@ -207,7 +221,7 @@ export class MuJoCoDemo {
       // Reset timing to avoid burst of steps
       this.lastRenderTime = undefined;
       this.accumulator = 0;
-      console.log('Reset to home keyframe');
+      console.log('Reset to home keyframe (with warm-up)');
     }
   }
 
@@ -222,6 +236,16 @@ export class MuJoCoDemo {
     if (this.keysPressed['KeyD'] || this.keysPressed['ArrowRight']) y -= 0.15;
     if (this.keysPressed['KeyQ']) rot += 0.5;
     if (this.keysPressed['KeyE']) rot -= 0.5;
+
+    // 1/2 keys: adjust neck pitch (head up/down)
+    if (this.onnxController) {
+      if (this.keysPressed['Digit1']) {
+        this.onnxController.commands[3] = Math.min(1.0, this.onnxController.commands[3] + 0.02);
+      }
+      if (this.keysPressed['Digit2']) {
+        this.onnxController.commands[3] = Math.max(-0.3, this.onnxController.commands[3] - 0.02);
+      }
+    }
 
     this.robotCommand = { x, y, rot };
 
@@ -248,6 +272,12 @@ export class MuJoCoDemo {
       const nv = this.model.nv;
       const nu = this.model.nu;
 
+      // Increase solver iterations for WASM accuracy
+      // Training uses iterations=1 (fast for RL), but WASM needs more
+      // iterations to converge to the same solution as native MuJoCo.
+      // This prevents the head from drooping and causing backward fall.
+      this.model.opt.iterations = 30;
+
       // Set positions from keyframe
       this.data.qpos.set(this.model.key_qpos.slice(0, nq));
 
@@ -263,7 +293,13 @@ export class MuJoCoDemo {
 
       // Update forward kinematics
       mujoco.mj_forward(this.model, this.data);
-      console.log('Applied home keyframe for OpenDuck (qpos, qvel=0, ctrl)');
+
+      // Warm up physics: run 200 steps (~400ms sim time) to let contacts settle
+      // and reach a physically consistent state before the policy takes over.
+      for (let i = 0; i < 200; i++) {
+        mujoco.mj_step(this.model, this.data);
+      }
+      console.log('Applied home keyframe + warm-up (200 steps, iterations=30)');
     }
 
     // Set camera for OpenDuck
@@ -441,8 +477,10 @@ export class MuJoCoDemo {
       if (elH) elH.textContent = h;
       if (elL) { elL.textContent = contacts[0] ? 'Y' : 'N'; elL.style.color = contacts[0] ? '#4caf50' : '#666'; }
       if (elR) { elR.textContent = contacts[1] ? 'Y' : 'N'; elR.style.color = contacts[1] ? '#4caf50' : '#666'; }
+      const elNeck = document.getElementById('stat-neck');
       if (elStep) elStep.textContent = this.onnxController.policyStepCount;
       if (elSpeed) elSpeed.textContent = Math.abs(this.onnxController.commands[0]).toFixed(2);
+      if (elNeck) elNeck.textContent = this.onnxController.commands[3].toFixed(1);
       if (elPause) {
         if (this.params.paused) {
           elPause.textContent = 'Space: PAUSED';

@@ -245,6 +245,7 @@
             <span><span class="dot green" id="policy-dot"></span><span id="policy-label">ONNX</span></span>
             <span><span class="stat-label">H </span><span class="stat-value" id="stat-height">--</span></span>
             <span><span class="stat-label">L </span><span class="stat-value" id="stat-left">-</span><span class="stat-label"> R </span><span class="stat-value" id="stat-right">-</span></span>
+            <span><span class="stat-label">neck </span><span class="stat-value" id="stat-neck">0.3</span></span>
             <span><span class="stat-label">step </span><span class="stat-value" id="stat-step">0</span></span>
         </div>
 
@@ -287,6 +288,8 @@
             <div id="joystick-knob"></div>
         </div>
         <div id="mobile-buttons">
+            <div class="action-btn" onclick="headUp()" style="padding:12px 18px; font-size:14px;">Head Up</div>
+            <div class="action-btn" onclick="headDown()" style="padding:12px 18px; font-size:14px;">Head Dn</div>
             <div class="action-btn" onclick="resetPose()" style="padding:12px 18px; font-size:14px;">Reset</div>
             <div class="action-btn" onclick="togglePolicy()" style="padding:12px 18px; font-size:14px;" id="btn-policy-mobile">Policy</div>
         </div>
@@ -320,6 +323,12 @@
             }
             function togglePause() {
                 if (window._demoActions) window._demoActions.togglePause();
+            }
+            function headUp() {
+                if (window._demoActions) window._demoActions.headUp();
+            }
+            function headDown() {
+                if (window._demoActions) window._demoActions.headDown();
             }
         </script>
 

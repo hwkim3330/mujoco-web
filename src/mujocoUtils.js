@@ -15,6 +15,9 @@ export async function reloadFunc() {
     const nv = this.model.nv;
     const nu = this.model.nu;
 
+    // Increase solver iterations for WASM accuracy
+    this.model.opt.iterations = 30;
+
     // Load keyframe 0 (home) qpos
     this.data.qpos.set(this.model.key_qpos.slice(0, nq));
 
@@ -29,7 +32,11 @@ export async function reloadFunc() {
     }
 
     this.mujoco.mj_forward(this.model, this.data);
-    console.log('Applied home keyframe for OpenDuck (qpos, qvel=0, ctrl)');
+    // Warm up physics to settle contacts
+    for (let i = 0; i < 100; i++) {
+      this.mujoco.mj_step(this.model, this.data);
+    }
+    console.log('Applied home keyframe for OpenDuck (iterations=30, warm-up)');
   }
 
   // Reinitialize ONNX controller with new model/data if loading OpenDuck
@@ -181,28 +188,8 @@ export function setupGUI(parentContext) {
   //  Name: "Pause Simulation".
   //  When paused, a "pause" text in white is displayed in the top left corner.
   //  Can also be triggered by pressing the spacebar.
-  const pauseSimulation = simulationFolder.add(parentContext.params, 'paused').name('Pause Simulation');
-  pauseSimulation.onChange((value) => {
-    if (value) {
-      const pausedText = document.createElement('div');
-      pausedText.style.position = 'absolute';
-      pausedText.style.top = '10px';
-      pausedText.style.left = '10px';
-      pausedText.style.color = 'white';
-      pausedText.style.font = 'normal 18px Arial';
-      pausedText.innerHTML = 'pause';
-      parentContext.container.appendChild(pausedText);
-    } else {
-      parentContext.container.removeChild(parentContext.container.lastChild);
-    }
-  });
-  document.addEventListener('keydown', (event) => {
-    if (event.code === 'Space') {
-      parentContext.params.paused = !parentContext.params.paused;
-      pauseSimulation.setValue(parentContext.params.paused);
-      event.preventDefault();
-    }
-  });
+  // Pause checkbox - display only (Space key handled in main.js setupKeyboardControls)
+  const pauseSimulation = simulationFolder.add(parentContext.params, 'paused').name('Pause Simulation').listen();
   actionInnerHTML += 'Play / Pause<br>';
   keyInnerHTML += 'Space<br>';
 
@@ -586,7 +573,7 @@ export async function loadSceneFromURL(mujoco, filename, parent) {
         reflectivity     : model.geom_matid[g] != -1 ?       model.mat_reflectance[model.geom_matid[g]] : undefined,
         roughness        : model.geom_matid[g] != -1 ? 1.0 - model.mat_shininess  [model.geom_matid[g]] : undefined,
         metalness        : model.geom_matid[g] != -1 ?       0.1 : undefined, //model.mat_metallic   [model.geom_matid[g]]
-        map              : texture
+        map              : texture || null
       });
 
       let mesh;// = new THREE.Mesh();

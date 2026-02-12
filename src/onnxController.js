@@ -136,6 +136,9 @@ export class OnnxController {
 
     // Start with a small forward velocity so the duck walks automatically
     this.commands[0] = 0.1;
+    // Set head slightly upward to prevent backward lean
+    // commands[3]=neck_pitch, commands[4]=head_pitch
+    this.commands[3] = 0.3;
 
     console.log('Default actuator:', Array.from(this.defaultActuator).map(v => v.toFixed(3)));
     console.log('Default command: forward velocity =', this.commands[0]);
@@ -264,18 +267,6 @@ export class OnnxController {
       console.log('=== END CONFIG ===');
     } catch (e) {
       console.warn('Actuator diagnostics failed:', e);
-    }
-  }
-
-  /**
-   * Apply position servo at every physics step.
-   * Sets ctrl = position error so that with biastype=0: F = kp * (target - qpos).
-   * The actuator's forcerange naturally clamps the output.
-   */
-  applyTorques() {
-    const ctrl = this.data.ctrl;
-    for (let i = 0; i < this.numDofs; i++) {
-      ctrl[i] = this.motorTargets[i] - this.data.qpos[this.qposIndices[i]];
     }
   }
 
@@ -447,12 +438,23 @@ export class OnnxController {
     if (this.policyStepCount === 1) {
       const quat = Array.from(this.data.qpos).slice(3,7);
       const contacts = this.getFeetContacts();
+      const gyro = this.getGyro();
+      const accel = this.getAccelerometer();
+      const rawAccel = [
+        this.data.sensordata[this.accelAddr],
+        this.data.sensordata[this.accelAddr + 1],
+        this.data.sensordata[this.accelAddr + 2]
+      ];
       console.log('=== FIRST POLICY STEP ===');
       console.log(`Pos: [${Array.from(this.data.qpos).slice(0,3).map(v=>v.toFixed(4))}]`);
       console.log(`Quat: [${quat.map(v=>v.toFixed(4))}]`);
+      console.log(`Gyro: [${gyro.map(v=>v.toFixed(4))}]`);
+      console.log(`Accel (raw): [${rawAccel.map(v=>v.toFixed(4))}]`);
+      console.log(`Accel (+1.3 bias): [${accel.map(v=>v.toFixed(4))}]`);
       console.log(`Contacts: [${contacts}] ncon=${this.data.ncon}`);
       console.log(`Commands: [${this.commands.map(v=>v.toFixed(3))}]`);
       console.log(`Obs length: ${obs.length}`);
+      console.log(`Solver iterations: ${this.model.opt.iterations}`);
       console.log('========================');
     }
 
@@ -526,7 +528,7 @@ export class OnnxController {
 
     this.imitationI = 0;
     this.imitationPhase = [0, 0];
-    this.commands = [0.1, 0, 0, 0, 0, 0, 0]; // Keep forward walk
+    this.commands = [0.1, 0, 0, 0.3, 0, 0, 0]; // Forward walk + head up
     this.stepCounter = 0;
     this.policyStepCount = 0;
 

@@ -107,8 +107,8 @@ export class MuJoCoDemo {
   }
 
   startAnimationLoop() {
-    const loop = (timeMS) => {
-      this.render(timeMS);
+    const loop = async (timeMS) => {
+      await this.render(timeMS);
       requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
@@ -267,7 +267,7 @@ export class MuJoCoDemo {
     this.renderer.setSize( window.innerWidth, window.innerHeight );
   }
 
-  render(timeMS) {
+  async render(timeMS) {
     this.controls.update();
 
     if (!this.params["paused"]) {
@@ -320,11 +320,11 @@ export class MuJoCoDemo {
         mujoco.mj_step(this.model, this.data);
         this.accumulator -= timestepMs;
 
-        // Fire-and-forget policy at decimation boundary (async, non-blocking)
+        // Run policy synchronously at decimation boundary
         if (this.onnxController && this.onnxController.enabled && this.onnxController.session) {
           this.onnxController.stepCounter++;
           if (this.onnxController.stepCounter % this.onnxController.decimation === 0) {
-            this.onnxController.runPolicyAsync();
+            await this.onnxController.runPolicy();
           }
         }
       }

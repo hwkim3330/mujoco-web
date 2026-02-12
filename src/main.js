@@ -107,8 +107,8 @@ export class MuJoCoDemo {
   }
 
   startAnimationLoop() {
-    const loop = (timeMS) => {
-      this.render(timeMS);
+    const loop = async (timeMS) => {
+      await this.render(timeMS);
       requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
@@ -266,7 +266,7 @@ export class MuJoCoDemo {
     this.renderer.setSize( window.innerWidth, window.innerHeight );
   }
 
-  render(timeMS) {
+  async render(timeMS) {
     this.controls.update();
 
     if (!this.params["paused"]) {
@@ -319,19 +319,11 @@ export class MuJoCoDemo {
         mujoco.mj_step(this.model, this.data);
         this.accumulator -= timestepMs;
 
-        // 2. After mj_step, check if policy should run (synchronous - no await)
+        // 2. After mj_step, run policy synchronously at decimation boundary
         if (this.onnxController && this.onnxController.enabled && this.onnxController.session) {
           this.onnxController.stepCounter++;
           if (this.onnxController.stepCounter % this.onnxController.decimation === 0) {
-            // Fire ONNX inference asynchronously - don't block physics
-            if (!this.onnxController._inferencing) {
-              this.onnxController._inferencing = true;
-              this.onnxController.runPolicy().then(() => {
-                this.onnxController._inferencing = false;
-              }).catch(() => {
-                this.onnxController._inferencing = false;
-              });
-            }
+            await this.onnxController.runPolicy();
           }
         }
       }

@@ -43,6 +43,10 @@ export class MuJoCoDemo {
     this.startupLiftStepsRemaining = 0;
     this.startupLiftForceZ = 28.0;
     this.startupLiftBodyId = -1;
+    this.recoveryMode = false;
+    this.recoveryStepCount = 0;
+    this.recoveryStableSteps = 0;
+    this.fallStepCount = 0;
 
     this.container = document.createElement( 'div' );
     document.body.appendChild( this.container );
@@ -225,6 +229,10 @@ export class MuJoCoDemo {
         this.updatePolicyUI();
       }
       this.startupLiftStepsRemaining = 900; // ~1.8s at dt=0.002
+      this.recoveryMode = false;
+      this.recoveryStepCount = 0;
+      this.recoveryStableSteps = 0;
+      this.fallStepCount = 0;
       // Reset timing to avoid burst of steps
       this.lastRenderTime = undefined;
       this.accumulator = 0;
@@ -259,6 +267,14 @@ export class MuJoCoDemo {
     if (this.onnxController) {
       this.onnxController.setCommand(x, y, rot);
     }
+  }
+
+  isRobotFallen() {
+    const h = this.data.qpos[2] || 0;
+    const q = this.data.qpos;
+    const sinp = 2 * (q[3] * q[5] - q[6] * q[4]);
+    const pitch = Math.asin(Math.max(-1, Math.min(1, sinp))) * 180 / Math.PI;
+    return h < 0.10 || Math.abs(pitch) > 65;
   }
 
   async init() {
@@ -466,11 +482,52 @@ export class MuJoCoDemo {
           this.startupLiftStepsRemaining--;
         }
 
+        const fallen = this.isRobotFallen();
+        this.fallStepCount = fallen ? this.fallStepCount + 1 : 0;
+        if (!this.recoveryMode && this.fallStepCount > 15) {
+          this.recoveryMode = true;
+          this.recoveryStepCount = 0;
+          this.recoveryStableSteps = 0;
+          if (this.onnxController) {
+            this.onnxController.enabled = false;
+            this.updatePolicyUI();
+          }
+        }
+
+        if (this.recoveryMode) {
+          this.recoveryStepCount++;
+          if (this.model.key_ctrl) {
+            this.data.ctrl.set(this.model.key_ctrl.slice(0, this.model.nu));
+          }
+          if (this.startupLiftBodyId >= 0) {
+            const adr = this.startupLiftBodyId * 3;
+            const point = [this.data.xipos[adr + 0], this.data.xipos[adr + 1], this.data.xipos[adr + 2]];
+            mujoco.mj_applyFT(this.model, this.data, [0, 0, 45], [0, 0, 0], point, this.startupLiftBodyId, this.data.qfrc_applied);
+          }
+          if (!fallen && (this.data.qpos[2] || 0) > 0.13) {
+            this.recoveryStableSteps++;
+          } else {
+            this.recoveryStableSteps = 0;
+          }
+          if (this.recoveryStableSteps > 25) {
+            this.recoveryMode = false;
+            this.fallStepCount = 0;
+            if (this.onnxController) {
+              this.onnxController.reset();
+              this.onnxController.enabled = true;
+              this.updatePolicyUI();
+            }
+          } else if (this.recoveryStepCount > 240) {
+            this.resetToHome();
+            this.recoveryMode = false;
+          }
+        }
+
         mujoco.mj_step(this.model, this.data);
         this.accumulator -= timestepMs;
 
         // Run policy synchronously at decimation boundary
-        if (this.onnxController && this.onnxController.enabled && this.onnxController.session) {
+        if (!this.recoveryMode && this.onnxController && this.onnxController.enabled && this.onnxController.session) {
           this.onnxController.stepCounter++;
           if (this.onnxController.stepCounter % this.onnxController.decimation === 0) {
             await this.onnxController.runPolicy();

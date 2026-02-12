@@ -240,47 +240,27 @@ export class OnnxController {
   logActuatorDiagnostics() {
     const n = this.numDofs;
     try {
-      console.log('=== ACTUATOR DIAGNOSTICS ===');
+      console.log('=== ACTUATOR CONFIG ===');
       console.log('timestep:', this.model.opt.timestep, '| nu:', n);
 
       if (this.model.actuator_biastype) {
         const bt = Array.from(this.model.actuator_biastype).slice(0, n);
-        console.log('biastype:', bt, '(0=none, 1=affine/position)');
-
-        // CRITICAL: <position> shortcut MUST have biastype=1 (affine).
-        // mujoco-js may not compile this correctly. Fix if needed.
-        const needsFix = bt.some(v => v === 0);
-        if (needsFix) {
-          console.warn('WARNING: biastype=0 detected for position actuators. Fixing to affine...');
-          for (let i = 0; i < n; i++) {
-            if (this.model.actuator_biastype[i] === 0) {
-              const kp = this.model.actuator_gainprm[i * 10] || 13.37;
-              this.model.actuator_biastype[i] = 1; // affine
-              this.model.actuator_biasprm[i * 10 + 0] = 0;
-              this.model.actuator_biasprm[i * 10 + 1] = -kp;
-              this.model.actuator_biasprm[i * 10 + 2] = 0;
-            }
-          }
-          // Verify
-          const btAfter = Array.from(this.model.actuator_biastype).slice(0, n);
-          console.log('biastype after fix:', btAfter);
-          const bp1 = [];
-          for (let i = 0; i < n; i++) bp1.push(this.model.actuator_biasprm[i * 10 + 1].toFixed(2));
-          console.log('biasprm[1] after fix:', bp1);
+        console.log('biastype:', bt, '(expect all 1 = affine/position)');
+        if (bt.some(v => v !== 1)) {
+          console.error('CRITICAL: biastype is NOT all 1! Actuators may not work as position servos.');
         }
       }
-
       if (this.model.actuator_gainprm) {
-        const gains = [];
-        for (let i = 0; i < n; i++) gains.push(this.model.actuator_gainprm[i * 10]);
-        console.log('gainprm[0] (kp):', gains.map(v => v.toFixed(2)));
+        console.log('kp:', this.model.actuator_gainprm[0].toFixed(2));
       }
-
-      if (this.model.actuator_forcerange) {
-        console.log('forcerange[0]:', this.model.actuator_forcerange[0].toFixed(2),
-          this.model.actuator_forcerange[1].toFixed(2));
+      if (this.model.actuator_biasprm) {
+        console.log('biasprm[0:3]:', [
+          this.model.actuator_biasprm[0],
+          this.model.actuator_biasprm[1],
+          this.model.actuator_biasprm[2]
+        ].map(v => v.toFixed(2)));
       }
-      console.log('=== END ACTUATOR DIAGNOSTICS ===');
+      console.log('=== END CONFIG ===');
     } catch (e) {
       console.warn('Actuator diagnostics failed:', e);
     }

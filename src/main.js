@@ -107,8 +107,8 @@ export class MuJoCoDemo {
   }
 
   startAnimationLoop() {
-    const loop = async (timeMS) => {
-      await this.render(timeMS);
+    const loop = (timeMS) => {
+      this.render(timeMS);
       requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
@@ -267,7 +267,7 @@ export class MuJoCoDemo {
     this.renderer.setSize( window.innerWidth, window.innerHeight );
   }
 
-  async render(timeMS) {
+  render(timeMS) {
     this.controls.update();
 
     if (!this.params["paused"]) {
@@ -316,15 +316,20 @@ export class MuJoCoDemo {
           mujoco.mj_applyFT(this.model, this.data, [force.x, force.y, force.z], [0, 0, 0], [point.x, point.y, point.z], bodyID, this.data.qfrc_applied);
         }
 
-        // 1. Physics step (matches Python: mj_step before policy)
+        // Apply manual position servo (bypasses broken mujoco-js actuator model)
+        if (this.onnxController && this.onnxController.enabled) {
+          this.onnxController.applyTorques();
+        }
+
+        // Physics step
         mujoco.mj_step(this.model, this.data);
         this.accumulator -= timestepMs;
 
-        // 2. After mj_step, run policy synchronously at decimation boundary
+        // Fire-and-forget policy at decimation boundary (async, non-blocking)
         if (this.onnxController && this.onnxController.enabled && this.onnxController.session) {
           this.onnxController.stepCounter++;
           if (this.onnxController.stepCounter % this.onnxController.decimation === 0) {
-            await this.onnxController.runPolicy();
+            this.onnxController.runPolicyAsync();
           }
         }
       }

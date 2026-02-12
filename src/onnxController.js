@@ -55,6 +55,7 @@ export class OnnxController {
 
     // Policy step counter for diagnostics
     this.policyStepCount = 0;
+    this._policyRunning = false;
 
     // Sensor addresses
     this.gyroAddr = -1;
@@ -266,6 +267,43 @@ export class OnnxController {
     }
   }
 
+  /**
+   * Apply position servo forces manually via qfrc_applied.
+   * Bypasses the MuJoCo actuator model entirely — works regardless of biastype.
+   * Called at EVERY physics step (not just policy steps).
+   */
+  applyTorques() {
+    const kp = 13.37;
+    const forceLimit = 3.23;
+    const ctrl = this.data.ctrl;
+
+    for (let i = 0; i < this.numDofs; i++) {
+      const qpos_i = this.data.qpos[this.qposIndices[i]];
+      // Neutralize the MuJoCo actuator by setting ctrl = current joint position
+      // This makes actuator force ≈ 0 regardless of biastype (0 or 1)
+      ctrl[i] = qpos_i;
+      // Apply position servo force manually
+      const error = this.motorTargets[i] - qpos_i;
+      this.data.qfrc_applied[this.qvelIndices[i]] +=
+        Math.max(-forceLimit, Math.min(forceLimit, kp * error));
+    }
+  }
+
+  /**
+   * Fire-and-forget async policy execution.
+   * Updates motorTargets when inference completes.
+   */
+  runPolicyAsync() {
+    if (this._policyRunning) return;
+    this._policyRunning = true;
+    this.runPolicy().then(() => {
+      this._policyRunning = false;
+    }).catch((e) => {
+      console.error('Policy error:', e);
+      this._policyRunning = false;
+    });
+  }
+
   setCommand(linX, linY, angZ) {
     this.commands[0] = Math.max(-0.15, Math.min(0.15, linX));
     this.commands[1] = Math.max(-0.2, Math.min(0.2, linY));
@@ -474,15 +512,10 @@ export class OnnxController {
         this.prevMotorTargets[i] = this.motorTargets[i];
       }
 
-      // 7. Apply to ctrl (persists for next decimation steps)
-      const ctrl = this.data.ctrl;
-      for (let i = 0; i < Math.min(this.numDofs, ctrl.length); i++) {
-        ctrl[i] = this.motorTargets[i];
-      }
-
+      // Motor targets updated — applyTorques() will use them at each physics step
       if (this.policyStepCount <= 3) {
-        const ctrlStr = Array.from(ctrl).slice(0, this.numDofs).map(v => v.toFixed(3));
-        console.log(`  ctrl=[${ctrlStr}]`);
+        const tgtStr = Array.from(this.motorTargets).slice(0, 5).map(v => v.toFixed(3));
+        console.log(`  targets=[${tgtStr}...]`);
       }
     } catch (e) {
       console.error('ONNX inference error:', e);
@@ -504,13 +537,6 @@ export class OnnxController {
       this.motorTargets.set(this.defaultActuator);
       this.prevMotorTargets.set(this.defaultActuator);
     }
-
-    // Reset ctrl to default
-    if (this.data && this.data.ctrl) {
-      const ctrl = this.data.ctrl;
-      for (let i = 0; i < Math.min(this.numDofs, ctrl.length); i++) {
-        ctrl[i] = this.defaultActuator[i];
-      }
-    }
+    this._policyRunning = false;
   }
 }

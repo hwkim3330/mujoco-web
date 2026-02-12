@@ -43,8 +43,8 @@ export class OnnxController {
 
     // Commands [lin_vel_x, lin_vel_y, ang_vel, neck_pitch, head_pitch, head_yaw, head_roll]
     this.commands = [0, 0, 0, 0, 0, 0, 0];
-    this.defaultForwardCommand = 0.1;
-    this.defaultNeckPitchCommand = 0.55;
+    this.defaultForwardCommand = 0.08;
+    this.defaultNeckPitchCommand = 0.65;
 
     // Imitation phase: period=0.54s, fps=50Hz → nb_steps_in_period=27
     // Verified from upstream polynomial_coefficients.pkl data

@@ -38,6 +38,8 @@ export class MuJoCoDemo {
     this.robotCommand = { x: 0, y: 0, rot: 0 };
     this.keysPressed = {};
     this.cameraOffset = new THREE.Vector3(0.5, 0.4, 0.5);
+    this.dragForceScale = 2000;
+    this.policyAutoPausedForDrag = false;
 
     this.container = document.createElement( 'div' );
     document.body.appendChild( this.container );
@@ -162,7 +164,7 @@ export class MuJoCoDemo {
       },
       headDown: () => {
         if (this.onnxController) {
-          this.onnxController.commands[3] = Math.max(-0.3, this.onnxController.commands[3] - 0.1);
+          this.onnxController.commands[3] = Math.max(0.35, this.onnxController.commands[3] - 0.1);
         }
       }
     };
@@ -227,10 +229,10 @@ export class MuJoCoDemo {
 
   updateRobotCommand() {
     // WASD / Arrow keys for movement
-    // Default: slow forward walk (0.1 m/s) when no keys pressed
-    let x = 0.1, y = 0, rot = 0;
+    // Default: slow forward walk (0.08 m/s) for better startup stability
+    let x = 0.08, y = 0, rot = 0;
 
-    if (this.keysPressed['KeyW'] || this.keysPressed['ArrowUp']) x = 0.15;
+    if (this.keysPressed['KeyW'] || this.keysPressed['ArrowUp']) x = 0.12;
     if (this.keysPressed['KeyS'] || this.keysPressed['ArrowDown']) x = -0.15;
     if (this.keysPressed['KeyA'] || this.keysPressed['ArrowLeft']) y += 0.15;
     if (this.keysPressed['KeyD'] || this.keysPressed['ArrowRight']) y -= 0.15;
@@ -243,7 +245,7 @@ export class MuJoCoDemo {
         this.onnxController.commands[3] = Math.min(1.0, this.onnxController.commands[3] + 0.02);
       }
       if (this.keysPressed['Digit2']) {
-        this.onnxController.commands[3] = Math.max(-0.3, this.onnxController.commands[3] - 0.02);
+        this.onnxController.commands[3] = Math.max(0.35, this.onnxController.commands[3] - 0.02);
       }
     }
 
@@ -276,7 +278,7 @@ export class MuJoCoDemo {
       // Training uses iterations=1 (fast for RL), but WASM needs more
       // iterations to converge to the same solution as native MuJoCo.
       // This prevents the head from drooping and causing backward fall.
-      this.model.opt.iterations = 30;
+      this.model.opt.iterations = 40;
 
       // Set positions from keyframe
       this.data.qpos.set(this.model.key_qpos.slice(0, nq));
@@ -294,12 +296,12 @@ export class MuJoCoDemo {
       // Update forward kinematics
       mujoco.mj_forward(this.model, this.data);
 
-      // Warm up physics: run 200 steps (~400ms sim time) to let contacts settle
+      // Warm up physics: run 300 steps (~600ms sim time) to let contacts settle
       // and reach a physically consistent state before the policy takes over.
-      for (let i = 0; i < 200; i++) {
+      for (let i = 0; i < 300; i++) {
         mujoco.mj_step(this.model, this.data);
       }
-      console.log('Applied home keyframe + warm-up (200 steps, iterations=30)');
+      console.log('Applied home keyframe + warm-up (300 steps, iterations=40)');
     }
 
     // Set camera for OpenDuck
@@ -357,6 +359,20 @@ export class MuJoCoDemo {
   async render(timeMS) {
     this.controls.update();
 
+    // Drag assist: pause policy while dragging so manual interaction wins.
+    const dragActive = !!(this.dragStateManager && this.dragStateManager.active && this.dragStateManager.physicsObject);
+    if (this.onnxController) {
+      if (dragActive && this.onnxController.enabled && !this.policyAutoPausedForDrag) {
+        this.onnxController.enabled = false;
+        this.policyAutoPausedForDrag = true;
+        this.updatePolicyUI();
+      } else if (!dragActive && this.policyAutoPausedForDrag) {
+        this.onnxController.enabled = true;
+        this.policyAutoPausedForDrag = false;
+        this.updatePolicyUI();
+      }
+    }
+
     if (!this.params["paused"]) {
       let timestep = this.model.opt.timestep;
       let timestepMs = timestep * 1000.0;
@@ -399,7 +415,7 @@ export class MuJoCoDemo {
           dragged.updateWorldMatrix(true, false);
           let bodyID = dragged.bodyID;
           this.dragStateManager.update();
-          let force = toMujocoPos(this.dragStateManager.currentWorld.clone().sub(this.dragStateManager.worldHit).multiplyScalar(this.model.body_mass[bodyID] * 500));
+          let force = toMujocoPos(this.dragStateManager.currentWorld.clone().sub(this.dragStateManager.worldHit).multiplyScalar(this.model.body_mass[bodyID] * this.dragForceScale));
           let point = toMujocoPos(this.dragStateManager.worldHit.clone());
           mujoco.mj_applyFT(this.model, this.data, [force.x, force.y, force.z], [0, 0, 0], [point.x, point.y, point.z], bodyID, this.data.qfrc_applied);
         }

@@ -107,10 +107,8 @@ export class MuJoCoDemo {
   }
 
   startAnimationLoop() {
-    // Sequential RAF: schedule next frame AFTER current render completes
-    // This prevents overlapping async renders from corrupting physics state
-    const loop = async (timeMS) => {
-      await this.render(timeMS);
+    const loop = (timeMS) => {
+      this.render(timeMS);
       requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
@@ -245,6 +243,10 @@ export class MuJoCoDemo {
       if (statusBar) { statusBar.textContent = 'ONNX: failed'; statusBar.style.color = '#f00'; }
     }
 
+    // Reset physics timing to avoid burst of steps on first frame
+    this.lastRenderTime = undefined;
+    this.accumulator = 0;
+
     // Hide loading screen
     const loadingScreen = document.getElementById('loading-screen');
     if (loadingScreen) loadingScreen.classList.add('hidden');
@@ -264,15 +266,25 @@ export class MuJoCoDemo {
     this.renderer.setSize( window.innerWidth, window.innerHeight );
   }
 
-  async render(timeMS) {
+  render(timeMS) {
     this.controls.update();
 
     if (!this.params["paused"]) {
       let timestep = this.model.opt.timestep;
-      // Never skip physics entirely - cap catch-up instead.
-      // Old 35ms skip caused lost physics frames when ONNX inference was slow.
-      if (timeMS - this.mujoco_time > 100.0) { this.mujoco_time = timeMS - 100.0; }
-      while (this.mujoco_time < timeMS) {
+      let timestepMs = timestep * 1000.0;
+
+      // Fixed-rate physics: run exactly the right number of steps for this frame
+      if (this.lastRenderTime === undefined) { this.lastRenderTime = timeMS; }
+      let dt = timeMS - this.lastRenderTime;
+      this.lastRenderTime = timeMS;
+
+      // Cap dt to prevent spiral of death (max 50ms = 25 physics steps)
+      if (dt > 50.0) dt = 50.0;
+
+      // Accumulate time and step physics
+      this.accumulator = (this.accumulator || 0) + dt;
+
+      while (this.accumulator >= timestepMs) {
 
         // Jitter the control state with gaussian random noise (non-ONNX scenes)
         if (!(this.onnxController && this.onnxController.enabled) && this.params["ctrlnoisestd"] > 0.0) {
@@ -303,15 +315,23 @@ export class MuJoCoDemo {
           mujoco.mj_applyFT(this.model, this.data, [force.x, force.y, force.z], [0, 0, 0], [point.x, point.y, point.z], bodyID, this.data.qfrc_applied);
         }
 
-        // 1. Physics step FIRST (matches Python: mj_step before policy)
+        // 1. Physics step (matches Python: mj_step before policy)
         mujoco.mj_step(this.model, this.data);
-        this.mujoco_time += timestep * 1000.0;
+        this.accumulator -= timestepMs;
 
-        // 2. After mj_step, check if policy should run (matches Python exactly)
+        // 2. After mj_step, check if policy should run (synchronous - no await)
         if (this.onnxController && this.onnxController.enabled && this.onnxController.session) {
           this.onnxController.stepCounter++;
           if (this.onnxController.stepCounter % this.onnxController.decimation === 0) {
-            await this.onnxController.runPolicy();
+            // Fire ONNX inference asynchronously - don't block physics
+            if (!this.onnxController._inferencing) {
+              this.onnxController._inferencing = true;
+              this.onnxController.runPolicy().then(() => {
+                this.onnxController._inferencing = false;
+              }).catch(() => {
+                this.onnxController._inferencing = false;
+              });
+            }
           }
         }
       }

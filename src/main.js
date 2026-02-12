@@ -40,6 +40,7 @@ export class MuJoCoDemo {
     this.cameraOffset = new THREE.Vector3(0.5, 0.4, 0.5);
     this.dragForceScale = 2000;
     this.policyAutoPausedForDrag = false;
+    this.fallRecoveryCounter = 0;
 
     this.container = document.createElement( 'div' );
     document.body.appendChild( this.container );
@@ -164,7 +165,7 @@ export class MuJoCoDemo {
       },
       headDown: () => {
         if (this.onnxController) {
-          this.onnxController.commands[3] = Math.max(0.35, this.onnxController.commands[3] - 0.1);
+          this.onnxController.commands[3] = Math.max(0.0, this.onnxController.commands[3] - 0.1);
         }
       }
     };
@@ -229,10 +230,10 @@ export class MuJoCoDemo {
 
   updateRobotCommand() {
     // WASD / Arrow keys for movement
-    // Default: slow forward walk (0.08 m/s) for better startup stability
-    let x = 0.08, y = 0, rot = 0;
+    // Default: conservative forward walk for stability
+    let x = 0.06, y = 0, rot = 0;
 
-    if (this.keysPressed['KeyW'] || this.keysPressed['ArrowUp']) x = 0.12;
+    if (this.keysPressed['KeyW'] || this.keysPressed['ArrowUp']) x = 0.10;
     if (this.keysPressed['KeyS'] || this.keysPressed['ArrowDown']) x = -0.15;
     if (this.keysPressed['KeyA'] || this.keysPressed['ArrowLeft']) y += 0.15;
     if (this.keysPressed['KeyD'] || this.keysPressed['ArrowRight']) y -= 0.15;
@@ -245,7 +246,7 @@ export class MuJoCoDemo {
         this.onnxController.commands[3] = Math.min(1.0, this.onnxController.commands[3] + 0.02);
       }
       if (this.keysPressed['Digit2']) {
-        this.onnxController.commands[3] = Math.max(0.35, this.onnxController.commands[3] - 0.02);
+        this.onnxController.commands[3] = Math.max(0.0, this.onnxController.commands[3] - 0.02);
       }
     }
 
@@ -516,6 +517,19 @@ export class MuJoCoDemo {
       const baseZ = this.data.qpos[2];
       // Update orbit controls target to follow duck (swizzle Y/Z for three.js)
       this.controls.target.set(baseX, baseZ, -baseY);
+    }
+
+    // Fall recovery: if clearly fallen for consecutive frames, reset to home.
+    if (this.onnxController && this.onnxController.enabled && this.params.scene.includes('openduck')) {
+      const h = this.data.qpos[2] || 0;
+      const q = this.data.qpos;
+      const pitch = Math.asin(2 * (q[3] * q[5] - q[6] * q[4])) * 180 / Math.PI;
+      const fallen = h < 0.10 || Math.abs(pitch) > 60;
+      this.fallRecoveryCounter = fallen ? this.fallRecoveryCounter + 1 : 0;
+      if (this.fallRecoveryCounter > 20) {
+        this.fallRecoveryCounter = 0;
+        this.resetToHome();
+      }
     }
 
     // Draw Tendons and Flex verts

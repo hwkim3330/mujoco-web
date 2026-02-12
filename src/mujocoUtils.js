@@ -910,7 +910,8 @@ export async function downloadExampleScenesFolder(mujoco) {
     "model_with_tendon.xml",
   ];
 
-  let requests = allFiles.map((url) => fetch("./assets/scenes/" + url));
+  let cacheBust = "?v=" + Date.now();
+  let requests = allFiles.map((url) => fetch("./assets/scenes/" + url + cacheBust));
   let responses = await Promise.all(requests);
   for (let i = 0; i < responses.length; i++) {
       let split = allFiles[i].split("/");

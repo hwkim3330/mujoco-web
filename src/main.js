@@ -164,7 +164,7 @@ export class MuJoCoDemo {
       },
       headDown: () => {
         if (this.onnxController) {
-          this.onnxController.commands[3] = Math.max(0.2, this.onnxController.commands[3] - 0.1);
+          this.onnxController.commands[3] = Math.max(0.3, this.onnxController.commands[3] - 0.1);
         }
       }
     };
@@ -210,9 +210,10 @@ export class MuJoCoDemo {
       if (this.model.key_ctrl) {
         this.data.ctrl.set(this.model.key_ctrl.slice(0, this.model.nu));
       }
+      this.model.opt.iterations = 40;
       this.mujoco.mj_forward(this.model, this.data);
       // Warm up physics to settle contacts
-      for (let i = 0; i < 100; i++) {
+      for (let i = 0; i < 300; i++) {
         this.mujoco.mj_step(this.model, this.data);
       }
       if (this.onnxController) {
@@ -223,16 +224,16 @@ export class MuJoCoDemo {
       // Reset timing to avoid burst of steps
       this.lastRenderTime = undefined;
       this.accumulator = 0;
-      console.log('Reset to home keyframe (with warm-up)');
+      console.log('Reset to home keyframe (warm-up 300, iterations=40)');
     }
   }
 
   updateRobotCommand() {
     // WASD / Arrow keys for movement
-    // Default: slow forward walk
-    let x = 0.06, y = 0, rot = 0;
+    // Default: conservative forward walk
+    let x = 0.04, y = 0, rot = 0;
 
-    if (this.keysPressed['KeyW'] || this.keysPressed['ArrowUp']) x = 0.12;
+    if (this.keysPressed['KeyW'] || this.keysPressed['ArrowUp']) x = 0.10;
     if (this.keysPressed['KeyS'] || this.keysPressed['ArrowDown']) x = -0.15;
     if (this.keysPressed['KeyA'] || this.keysPressed['ArrowLeft']) y += 0.15;
     if (this.keysPressed['KeyD'] || this.keysPressed['ArrowRight']) y -= 0.15;
@@ -245,7 +246,7 @@ export class MuJoCoDemo {
         this.onnxController.commands[3] = Math.min(1.0, this.onnxController.commands[3] + 0.02);
       }
       if (this.keysPressed['Digit2']) {
-        this.onnxController.commands[3] = Math.max(0.2, this.onnxController.commands[3] - 0.02);
+        this.onnxController.commands[3] = Math.max(0.3, this.onnxController.commands[3] - 0.02);
       }
     }
 

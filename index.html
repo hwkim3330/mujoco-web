@@ -11,62 +11,9 @@
         <meta name="theme-color"        content="#1a2a3a">
         <link rel ="icon" type="image/x-icon" href="./assets/favicon.png">
         <style>
-            #controls-overlay {
-                position: fixed;
-                bottom: 20px;
-                left: 20px;
-                z-index: 100;
-                pointer-events: none;
-            }
-            #controls-overlay > * {
-                pointer-events: auto;
-            }
-            .control-hint {
-                background: rgba(0,0,0,0.6);
-                color: #fff;
-                padding: 8px 14px;
-                border-radius: 8px;
-                font: 13px/1.5 monospace;
-                margin-bottom: 8px;
-                backdrop-filter: blur(4px);
-            }
-            #mobile-joystick {
-                display: none;
-                width: 140px;
-                height: 140px;
-                background: rgba(255,255,255,0.15);
-                border: 2px solid rgba(255,255,255,0.3);
-                border-radius: 50%;
-                position: relative;
-                backdrop-filter: blur(4px);
-            }
-            #joystick-knob {
-                width: 50px;
-                height: 50px;
-                background: rgba(255,255,255,0.5);
-                border-radius: 50%;
-                position: absolute;
-                top: 50%;
-                left: 50%;
-                transform: translate(-50%, -50%);
-            }
-            #status-bar {
-                position: fixed;
-                top: 10px;
-                left: 50%;
-                transform: translateX(-50%);
-                background: rgba(0,0,0,0.6);
-                color: #0f0;
-                padding: 6px 16px;
-                border-radius: 20px;
-                font: bold 13px monospace;
-                z-index: 100;
-                backdrop-filter: blur(4px);
-            }
-            @media (max-width: 768px) {
-                #mobile-joystick { display: block; }
-                .control-hint { display: none; }
-            }
+            * { box-sizing: border-box; }
+
+            /* Loading Screen */
             #loading-screen {
                 position: fixed;
                 top: 0; left: 0; right: 0; bottom: 0;
@@ -77,7 +24,7 @@
                 justify-content: center;
                 z-index: 1000;
                 color: #fff;
-                font-family: monospace;
+                font-family: 'SF Mono', 'Fira Code', monospace;
                 transition: opacity 0.5s;
             }
             #loading-screen.hidden {
@@ -85,15 +32,194 @@
                 pointer-events: none;
             }
             .loading-spinner {
-                width: 40px;
-                height: 40px;
-                border: 3px solid rgba(255,255,255,0.2);
-                border-top-color: #fff;
+                width: 40px; height: 40px;
+                border: 3px solid rgba(255,255,255,0.15);
+                border-top-color: #4fc3f7;
                 border-radius: 50%;
-                animation: spin 1s linear infinite;
+                animation: spin 0.8s linear infinite;
                 margin-bottom: 16px;
             }
             @keyframes spin { to { transform: rotate(360deg); } }
+
+            /* Top Status Bar */
+            #status-bar {
+                position: fixed;
+                top: 12px; left: 50%;
+                transform: translateX(-50%);
+                background: rgba(10, 15, 25, 0.8);
+                color: #e0e0e0;
+                padding: 8px 20px;
+                border-radius: 24px;
+                font: 600 13px/1 'SF Mono', 'Fira Code', monospace;
+                z-index: 100;
+                backdrop-filter: blur(12px);
+                border: 1px solid rgba(255,255,255,0.08);
+                white-space: nowrap;
+                display: flex;
+                align-items: center;
+                gap: 16px;
+            }
+            #status-bar .dot {
+                width: 8px; height: 8px;
+                border-radius: 50%;
+                display: inline-block;
+                margin-right: 4px;
+            }
+            #status-bar .dot.green { background: #4caf50; box-shadow: 0 0 6px #4caf50; }
+            #status-bar .dot.yellow { background: #ffc107; box-shadow: 0 0 6px #ffc107; }
+            #status-bar .dot.red { background: #f44336; box-shadow: 0 0 6px #f44336; }
+            .stat-label { color: #888; font-size: 11px; }
+            .stat-value { color: #fff; }
+
+            /* Bottom Controls Panel */
+            #controls-panel {
+                position: fixed;
+                bottom: 16px;
+                left: 50%;
+                transform: translateX(-50%);
+                z-index: 100;
+                display: flex;
+                align-items: flex-end;
+                gap: 16px;
+                pointer-events: none;
+            }
+            #controls-panel > * { pointer-events: auto; }
+
+            /* WASD Key Display */
+            .key-grid {
+                display: grid;
+                grid-template-columns: repeat(3, 36px);
+                grid-template-rows: repeat(2, 36px);
+                gap: 4px;
+                background: rgba(10, 15, 25, 0.7);
+                padding: 10px;
+                border-radius: 12px;
+                backdrop-filter: blur(12px);
+                border: 1px solid rgba(255,255,255,0.08);
+            }
+            .key {
+                width: 36px; height: 36px;
+                background: rgba(255,255,255,0.06);
+                border: 1px solid rgba(255,255,255,0.12);
+                border-radius: 6px;
+                color: #aaa;
+                font: 600 13px/36px 'SF Mono', monospace;
+                text-align: center;
+                transition: all 0.1s;
+            }
+            .key.active {
+                background: rgba(79, 195, 247, 0.25);
+                border-color: rgba(79, 195, 247, 0.5);
+                color: #4fc3f7;
+                box-shadow: 0 0 8px rgba(79, 195, 247, 0.2);
+            }
+            .key.spacer { visibility: hidden; border: none; background: none; }
+
+            /* Action Buttons */
+            .btn-group {
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+                background: rgba(10, 15, 25, 0.7);
+                padding: 10px;
+                border-radius: 12px;
+                backdrop-filter: blur(12px);
+                border: 1px solid rgba(255,255,255,0.08);
+            }
+            .action-btn {
+                padding: 6px 14px;
+                background: rgba(255,255,255,0.06);
+                border: 1px solid rgba(255,255,255,0.12);
+                border-radius: 6px;
+                color: #ccc;
+                font: 600 12px 'SF Mono', monospace;
+                cursor: pointer;
+                transition: all 0.15s;
+                text-align: center;
+                white-space: nowrap;
+            }
+            .action-btn:hover {
+                background: rgba(255,255,255,0.12);
+                color: #fff;
+            }
+            .action-btn.active {
+                background: rgba(76, 175, 80, 0.2);
+                border-color: rgba(76, 175, 80, 0.4);
+                color: #4caf50;
+            }
+            .action-btn.warn {
+                background: rgba(255, 193, 7, 0.15);
+                border-color: rgba(255, 193, 7, 0.3);
+                color: #ffc107;
+            }
+
+            /* Speed Indicator */
+            .speed-display {
+                background: rgba(10, 15, 25, 0.7);
+                padding: 10px 14px;
+                border-radius: 12px;
+                backdrop-filter: blur(12px);
+                border: 1px solid rgba(255,255,255,0.08);
+                text-align: center;
+            }
+            .speed-label {
+                color: #888;
+                font: 600 10px 'SF Mono', monospace;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+                margin-bottom: 4px;
+            }
+            .speed-value {
+                color: #4fc3f7;
+                font: 700 18px 'SF Mono', monospace;
+            }
+            .speed-unit {
+                color: #666;
+                font: 600 10px 'SF Mono', monospace;
+            }
+
+            /* Mobile Joystick */
+            #mobile-joystick {
+                display: none;
+                width: 120px; height: 120px;
+                background: rgba(255,255,255,0.08);
+                border: 2px solid rgba(255,255,255,0.15);
+                border-radius: 50%;
+                position: fixed;
+                bottom: 30px; left: 30px;
+                z-index: 100;
+                backdrop-filter: blur(8px);
+            }
+            #joystick-knob {
+                width: 44px; height: 44px;
+                background: rgba(79, 195, 247, 0.4);
+                border: 2px solid rgba(79, 195, 247, 0.6);
+                border-radius: 50%;
+                position: absolute;
+                top: 50%; left: 50%;
+                transform: translate(-50%, -50%);
+                transition: transform 0.05s;
+            }
+            #mobile-buttons {
+                display: none;
+                position: fixed;
+                bottom: 30px; right: 20px;
+                z-index: 100;
+                flex-direction: column;
+                gap: 8px;
+            }
+
+            @media (max-width: 768px), (pointer: coarse) {
+                #mobile-joystick { display: block; }
+                #mobile-buttons { display: flex; }
+                #controls-panel { display: none; }
+                #status-bar { font-size: 11px; padding: 6px 12px; gap: 10px; }
+            }
+
+            /* Hide lil-gui on mobile */
+            @media (max-width: 768px) {
+                .lil-gui { display: none !important; }
+            }
         </style>
     </head>
 
@@ -110,22 +236,59 @@
         <!-- Loading Screen -->
         <div id="loading-screen">
             <div class="loading-spinner"></div>
-            <div>Loading MuJoCo + ONNX Model...</div>
-            <div id="loading-status" style="margin-top:8px; font-size:11px; color:#888;">Initializing...</div>
+            <div style="font-size: 16px; font-weight: 600;">OpenDuck Mini</div>
+            <div id="loading-status" style="margin-top:8px; font-size:12px; color:#888;">Loading MuJoCo + ONNX...</div>
         </div>
 
         <!-- Status Bar -->
-        <div id="status-bar">ONNX: loading...</div>
+        <div id="status-bar">
+            <span><span class="dot green" id="policy-dot"></span><span id="policy-label">ONNX</span></span>
+            <span><span class="stat-label">H </span><span class="stat-value" id="stat-height">--</span></span>
+            <span><span class="stat-label">L </span><span class="stat-value" id="stat-left">-</span><span class="stat-label"> R </span><span class="stat-value" id="stat-right">-</span></span>
+            <span><span class="stat-label">step </span><span class="stat-value" id="stat-step">0</span></span>
+        </div>
 
-        <!-- Controls Overlay -->
-        <div id="controls-overlay">
-            <div class="control-hint">
-                WASD: Move | Q/E: Rotate<br>
-                P: Toggle Policy | R: Reset Pose
+        <!-- Bottom Controls -->
+        <div id="controls-panel">
+            <!-- Speed Display -->
+            <div class="speed-display">
+                <div class="speed-label">Speed</div>
+                <div><span class="speed-value" id="speed-value">0.10</span> <span class="speed-unit">m/s</span></div>
             </div>
-            <div id="mobile-joystick">
-                <div id="joystick-knob"></div>
+
+            <!-- WASD Keys -->
+            <div class="key-grid">
+                <div class="key spacer"></div>
+                <div class="key" id="key-w">W</div>
+                <div class="key spacer"></div>
+                <div class="key" id="key-a">A</div>
+                <div class="key" id="key-s">S</div>
+                <div class="key" id="key-d">D</div>
             </div>
+
+            <!-- QE Keys (rotation) -->
+            <div class="key-grid" style="grid-template-columns: repeat(2, 36px);">
+                <div class="key" id="key-q">Q</div>
+                <div class="key" id="key-e">E</div>
+                <div class="key spacer"></div>
+                <div class="key spacer"></div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="btn-group">
+                <div class="action-btn" id="btn-policy" onclick="togglePolicy()">P: Policy</div>
+                <div class="action-btn" id="btn-reset" onclick="resetPose()">R: Reset</div>
+                <div class="action-btn" id="btn-pause" onclick="togglePause()">Space: Pause</div>
+            </div>
+        </div>
+
+        <!-- Mobile Controls -->
+        <div id="mobile-joystick">
+            <div id="joystick-knob"></div>
+        </div>
+        <div id="mobile-buttons">
+            <div class="action-btn" onclick="resetPose()" style="padding:12px 18px; font-size:14px;">Reset</div>
+            <div class="action-btn" onclick="togglePolicy()" style="padding:12px 18px; font-size:14px;" id="btn-policy-mobile">Policy</div>
         </div>
 
 		<!-- Import maps polyfill -->
@@ -146,6 +309,20 @@
             <script type="module" src="./src/main.js"></script>
         </div>
 
+        <!-- Global button handlers (called from onclick) -->
+        <script>
+            // These get wired up by main.js via window._demoActions
+            function togglePolicy() {
+                if (window._demoActions) window._demoActions.togglePolicy();
+            }
+            function resetPose() {
+                if (window._demoActions) window._demoActions.resetPose();
+            }
+            function togglePause() {
+                if (window._demoActions) window._demoActions.togglePause();
+            }
+        </script>
+
         <!-- Mobile Joystick Logic -->
         <script>
             document.addEventListener('DOMContentLoaded', () => {
@@ -154,7 +331,7 @@
                 if (!joystick || !knob) return;
 
                 let touching = false;
-                const maxDist = 45;
+                const maxDist = 38;
 
                 joystick.addEventListener('touchstart', (e) => {
                     touching = true;
@@ -176,8 +353,6 @@
                         dy = dy / dist * maxDist;
                     }
                     knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
-
-                    // Dispatch custom event for the controller
                     window.dispatchEvent(new CustomEvent('joystick-move', {
                         detail: { x: -dy / maxDist * 0.15, y: -dx / maxDist * 0.2 }
                     }));
@@ -186,7 +361,7 @@
                 const resetJoystick = () => {
                     touching = false;
                     knob.style.transform = 'translate(-50%, -50%)';
-                    window.dispatchEvent(new CustomEvent('joystick-move', { detail: { x: 0, y: 0 } }));
+                    window.dispatchEvent(new CustomEvent('joystick-move', { detail: { x: 0.1, y: 0 } }));
                 };
 
                 joystick.addEventListener('touchend', resetJoystick);

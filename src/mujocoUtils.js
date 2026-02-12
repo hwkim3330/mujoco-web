@@ -294,75 +294,29 @@ export function setupGUI(parentContext) {
   if (parentContext.params.scene.includes('openduck')) {
     let robotFolder = parentContext.gui.addFolder("Robot Control");
 
-    // Command state
-    parentContext.robotCommand = { x: 0, y: 0, rot: 0 };
-    parentContext.params.robotEnabled = false;
-
-    // Enable/disable robot control
-    robotFolder.add(parentContext.params, 'robotEnabled').name('Enable Control');
-
-    // Command display
+    // Read-only display of current commands (controlled by main.js keyboard handlers)
     parentContext.params.cmdX = 0;
     parentContext.params.cmdY = 0;
     parentContext.params.cmdRot = 0;
-    robotFolder.add(parentContext.params, 'cmdX', -0.15, 0.15, 0.01).name('Forward').listen();
-    robotFolder.add(parentContext.params, 'cmdY', -0.2, 0.2, 0.01).name('Lateral').listen();
-    robotFolder.add(parentContext.params, 'cmdRot', -1, 1, 0.1).name('Rotation').listen();
-
-    // Keyboard controls
-    const updateCommand = () => {
-      parentContext.params.cmdX = parentContext.robotCommand.x;
-      parentContext.params.cmdY = parentContext.robotCommand.y;
-      parentContext.params.cmdRot = parentContext.robotCommand.rot;
-    };
-
-    document.addEventListener('keydown', (event) => {
-      if (!parentContext.params.robotEnabled) return;
-
-      switch(event.key.toLowerCase()) {
-        case 'w': case 'arrowup':
-          parentContext.robotCommand.x = 0.15;
-          break;
-        case 's': case 'arrowdown':
-          parentContext.robotCommand.x = -0.15;
-          break;
-        case 'a': case 'arrowleft':
-          parentContext.robotCommand.y = 0.2;
-          break;
-        case 'd': case 'arrowright':
-          parentContext.robotCommand.y = -0.2;
-          break;
-        case 'q':
-          parentContext.robotCommand.rot = 1;
-          break;
-        case 'e':
-          parentContext.robotCommand.rot = -1;
-          break;
-      }
-      updateCommand();
-    });
-
-    document.addEventListener('keyup', (event) => {
-      if (!parentContext.params.robotEnabled) return;
-
-      switch(event.key.toLowerCase()) {
-        case 'w': case 's': case 'arrowup': case 'arrowdown':
-          parentContext.robotCommand.x = 0;
-          break;
-        case 'a': case 'd': case 'arrowleft': case 'arrowright':
-          parentContext.robotCommand.y = 0;
-          break;
-        case 'q': case 'e':
-          parentContext.robotCommand.rot = 0;
-          break;
-      }
-      updateCommand();
-    });
+    robotFolder.add(parentContext.params, 'cmdX', -0.15, 0.15, 0.01).name('Forward').listen().disable();
+    robotFolder.add(parentContext.params, 'cmdY', -0.2, 0.2, 0.01).name('Lateral').listen().disable();
+    robotFolder.add(parentContext.params, 'cmdRot', -1, 1, 0.1).name('Rotation').listen().disable();
 
     // Camera follow toggle
     robotFolder.add(parentContext.params, 'cameraFollow').name('Camera Follow');
 
     robotFolder.open();
+
+    // Update GUI display from ONNX controller state each frame
+    const updateGUIFromController = () => {
+      if (parentContext.onnxController) {
+        parentContext.params.cmdX = parentContext.onnxController.commands[0];
+        parentContext.params.cmdY = parentContext.onnxController.commands[1];
+        parentContext.params.cmdRot = parentContext.onnxController.commands[2];
+      }
+      requestAnimationFrame(updateGUIFromController);
+    };
+    requestAnimationFrame(updateGUIFromController);
 
     // Add help text
     actionInnerHTML += 'Forward / Back<br>';
@@ -374,46 +328,6 @@ export function setupGUI(parentContext) {
   }
   // ========== End Robot Controls ==========
 
-  // ========== General Scene Controls (for non-OpenDuck scenes) ==========
-  if (!parentContext.params.scene.includes('openduck')) {
-    let forceFolder = parentContext.gui.addFolder("Push Controls");
-    parentContext.params.pushForce = 50;
-    forceFolder.add(parentContext.params, 'pushForce', 10, 200, 10).name('Push Force');
-
-    const applyForceToRoot = (fx, fy, fz) => {
-      // Apply force to body 1 (first non-world body)
-      if (parentContext.model.nbody > 1) {
-        const bodyID = 1;
-        const mass = parentContext.model.body_mass[bodyID];
-        const force = parentContext.params.pushForce * mass;
-        const pos = [
-          parentContext.data.xpos[bodyID * 3],
-          parentContext.data.xpos[bodyID * 3 + 1],
-          parentContext.data.xpos[bodyID * 3 + 2]
-        ];
-        parentContext.mujoco.mj_applyFT(
-          parentContext.model, parentContext.data,
-          [fx * force, fy * force, fz * force],
-          [0, 0, 0], pos, bodyID,
-          parentContext.data.qfrc_applied
-        );
-      }
-    };
-
-    document.addEventListener('keydown', (event) => {
-      if (parentContext.params.scene.includes('openduck')) return;
-      switch(event.code) {
-        case 'KeyW': case 'ArrowUp':    applyForceToRoot(1, 0, 0); break;
-        case 'KeyS': case 'ArrowDown':  applyForceToRoot(-1, 0, 0); break;
-        case 'KeyA': case 'ArrowLeft':  applyForceToRoot(0, 1, 0); break;
-        case 'KeyD': case 'ArrowRight': applyForceToRoot(0, -1, 0); break;
-        case 'KeyQ': applyForceToRoot(0, 0, 1); break;
-        case 'KeyE': applyForceToRoot(0, 0, -1); break;
-      }
-    });
-
-    forceFolder.open();
-  }
   // ========== End General Scene Controls ==========
 
   // Add function that resets the camera to the default position.

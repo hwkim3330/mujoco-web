@@ -456,11 +456,13 @@ export class OnnxController {
       console.log('========================');
     }
 
-    // Brief logging for first 10 policy steps
-    if (this.policyStepCount <= 10) {
+    // Brief logging for first 30 policy steps
+    if (this.policyStepCount <= 30) {
       const h = (this.data.qpos[2] || 0).toFixed(4);
+      const quat = [this.data.qpos[3], this.data.qpos[4], this.data.qpos[5], this.data.qpos[6]];
+      const pitch = Math.asin(2*(quat[0]*quat[2] - quat[3]*quat[1])) * 180/Math.PI;
       const contacts = this.getFeetContacts();
-      console.log(`[Policy #${this.policyStepCount}] H=${h} contacts=[${contacts}] cmd=[${this.commands[0].toFixed(2)},${this.commands[1].toFixed(2)}]`);
+      console.log(`[Policy #${this.policyStepCount}] H=${h} pitch=${pitch.toFixed(1)}° contacts=[${contacts}] cmd=[${this.commands[0].toFixed(2)},${this.commands[1].toFixed(2)}]`);
     }
 
     // 3. Run ONNX inference (synchronous via await)
@@ -524,13 +526,19 @@ export class OnnxController {
 
     this.imitationI = 0;
     this.imitationPhase = [0, 0];
-    this.commands = [0, 0, 0, 0, 0, 0, 0];
+    this.commands = [0.1, 0, 0, 0, 0, 0, 0]; // Keep forward walk
     this.stepCounter = 0;
     this.policyStepCount = 0;
 
     if (this.motorTargets && this.defaultActuator) {
       this.motorTargets.set(this.defaultActuator);
       this.prevMotorTargets.set(this.defaultActuator);
+
+      // Restore ctrl to default (critical: old ctrl values persist otherwise)
+      const ctrl = this.data.ctrl;
+      for (let i = 0; i < Math.min(this.numDofs, ctrl.length); i++) {
+        ctrl[i] = this.defaultActuator[i];
+      }
     }
     this._policyRunning = false;
   }

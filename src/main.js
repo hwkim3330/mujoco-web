@@ -115,35 +115,78 @@ export class MuJoCoDemo {
   }
 
   setupKeyboardControls() {
+    // Key visual indicators
+    const keyMap = {
+      'KeyW': 'key-w', 'KeyA': 'key-a', 'KeyS': 'key-s', 'KeyD': 'key-d',
+      'KeyQ': 'key-q', 'KeyE': 'key-e',
+      'ArrowUp': 'key-w', 'ArrowDown': 'key-s', 'ArrowLeft': 'key-a', 'ArrowRight': 'key-d'
+    };
+
     document.addEventListener('keydown', (e) => {
       this.keysPressed[e.code] = true;
 
-      // P key: toggle ONNX policy on/off (for physics-only testing)
-      if (e.code === 'KeyP' && this.onnxController) {
-        this.onnxController.enabled = !this.onnxController.enabled;
-        const statusBar = document.getElementById('status-bar');
-        if (!this.onnxController.enabled) {
-          // Reset ctrl to default when disabling
-          this.onnxController.reset();
-          if (statusBar) { statusBar.textContent = 'POLICY DISABLED (P to re-enable)'; statusBar.style.color = '#ff0'; }
-          console.log('ONNX policy DISABLED - physics only mode');
-        } else {
-          if (statusBar) { statusBar.textContent = 'POLICY ENABLED'; statusBar.style.color = '#0f0'; }
-          console.log('ONNX policy ENABLED');
-        }
-      }
+      // Visual key feedback
+      const keyEl = document.getElementById(keyMap[e.code]);
+      if (keyEl) keyEl.classList.add('active');
+
+      // P key: toggle ONNX policy
+      if (e.code === 'KeyP') this.togglePolicy();
 
       // R key: reset robot to home keyframe
-      if (e.code === 'KeyR') {
-        this.resetToHome();
+      if (e.code === 'KeyR') this.resetToHome();
+
+      // Space: toggle pause
+      if (e.code === 'Space') {
+        this.params.paused = !this.params.paused;
+        e.preventDefault();
       }
 
       this.updateRobotCommand();
     });
     document.addEventListener('keyup', (e) => {
       this.keysPressed[e.code] = false;
+      const keyEl = document.getElementById(keyMap[e.code]);
+      if (keyEl) keyEl.classList.remove('active');
       this.updateRobotCommand();
     });
+
+    // Expose actions for on-screen buttons
+    window._demoActions = {
+      togglePolicy: () => this.togglePolicy(),
+      resetPose: () => this.resetToHome(),
+      togglePause: () => { this.params.paused = !this.params.paused; }
+    };
+  }
+
+  togglePolicy() {
+    if (!this.onnxController) return;
+    this.onnxController.enabled = !this.onnxController.enabled;
+    if (!this.onnxController.enabled) {
+      this.onnxController.reset();
+      console.log('ONNX policy DISABLED');
+    } else {
+      console.log('ONNX policy ENABLED');
+    }
+    this.updatePolicyUI();
+  }
+
+  updatePolicyUI() {
+    const dot = document.getElementById('policy-dot');
+    const label = document.getElementById('policy-label');
+    const btn = document.getElementById('btn-policy');
+    const btnMobile = document.getElementById('btn-policy-mobile');
+    if (!this.onnxController) return;
+    if (this.onnxController.enabled) {
+      if (dot) { dot.className = 'dot green'; }
+      if (label) label.textContent = 'ONNX';
+      if (btn) { btn.textContent = 'P: Policy ON'; btn.className = 'action-btn active'; }
+      if (btnMobile) { btnMobile.textContent = 'Policy ON'; btnMobile.className = 'action-btn active'; }
+    } else {
+      if (dot) { dot.className = 'dot yellow'; }
+      if (label) label.textContent = 'OFF';
+      if (btn) { btn.textContent = 'P: Policy OFF'; btn.className = 'action-btn warn'; }
+      if (btnMobile) { btnMobile.textContent = 'Policy OFF'; btnMobile.className = 'action-btn warn'; }
+    }
   }
 
   resetToHome() {
@@ -156,7 +199,14 @@ export class MuJoCoDemo {
         this.data.ctrl.set(this.model.key_ctrl.slice(0, this.model.nu));
       }
       this.mujoco.mj_forward(this.model, this.data);
-      if (this.onnxController) this.onnxController.reset();
+      if (this.onnxController) {
+        this.onnxController.reset();
+        this.onnxController.enabled = true;
+        this.updatePolicyUI();
+      }
+      // Reset timing to avoid burst of steps
+      this.lastRenderTime = undefined;
+      this.accumulator = 0;
       console.log('Reset to home keyframe');
     }
   }
@@ -231,17 +281,18 @@ export class MuJoCoDemo {
   async initOnnxController() {
     this.onnxController = new OnnxController(mujoco, this.model, this.data);
 
-    const statusBar = document.getElementById('status-bar');
     try {
       const loaded = await this.onnxController.loadModel('./assets/models/openduck_walk.onnx');
       if (loaded) {
         this.onnxController.enabled = true;
-        if (statusBar) statusBar.textContent = 'ONNX: active | auto-walking | WASD to steer';
-        if (statusBar) statusBar.style.color = '#0f0';
+        this.updatePolicyUI();
       }
     } catch (e) {
       console.warn('Failed to load ONNX model:', e);
-      if (statusBar) { statusBar.textContent = 'ONNX: failed'; statusBar.style.color = '#f00'; }
+      const dot = document.getElementById('policy-dot');
+      const label = document.getElementById('policy-label');
+      if (dot) dot.className = 'dot red';
+      if (label) label.textContent = 'FAIL';
     }
 
     // Reset physics timing to avoid burst of steps on first frame
@@ -377,14 +428,29 @@ export class MuJoCoDemo {
       }
     }
 
-    // Update status bar with debug info
-    if (this.onnxController && this.onnxController.enabled && this.params.scene.includes('openduck')) {
-      const statusBar = document.getElementById('status-bar');
-      if (statusBar && this.onnxController.policyStepCount > 0) {
-        const h = (this.data.qpos[2] || 0).toFixed(3);
-        const contacts = this.onnxController.getFeetContacts();
-        const cmd = this.onnxController.commands;
-        statusBar.textContent = `H:${h} | L:${contacts[0]?'Y':'N'} R:${contacts[1]?'Y':'N'} | cmd:[${cmd[0].toFixed(2)},${cmd[1].toFixed(2)}] | step:${this.onnxController.policyStepCount}`;
+    // Update UI elements
+    if (this.onnxController && this.params.scene.includes('openduck')) {
+      const h = (this.data.qpos[2] || 0).toFixed(3);
+      const contacts = this.onnxController.getFeetContacts();
+      const elH = document.getElementById('stat-height');
+      const elL = document.getElementById('stat-left');
+      const elR = document.getElementById('stat-right');
+      const elStep = document.getElementById('stat-step');
+      const elSpeed = document.getElementById('speed-value');
+      const elPause = document.getElementById('btn-pause');
+      if (elH) elH.textContent = h;
+      if (elL) { elL.textContent = contacts[0] ? 'Y' : 'N'; elL.style.color = contacts[0] ? '#4caf50' : '#666'; }
+      if (elR) { elR.textContent = contacts[1] ? 'Y' : 'N'; elR.style.color = contacts[1] ? '#4caf50' : '#666'; }
+      if (elStep) elStep.textContent = this.onnxController.policyStepCount;
+      if (elSpeed) elSpeed.textContent = Math.abs(this.onnxController.commands[0]).toFixed(2);
+      if (elPause) {
+        if (this.params.paused) {
+          elPause.textContent = 'Space: PAUSED';
+          elPause.className = 'action-btn warn';
+        } else {
+          elPause.textContent = 'Space: Pause';
+          elPause.className = 'action-btn';
+        }
       }
     }
 

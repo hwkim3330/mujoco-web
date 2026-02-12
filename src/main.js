@@ -42,6 +42,7 @@ export class MuJoCoDemo {
     this.policyAutoPausedForDrag = false;
     this.startupLiftBodyId = -1;
     this.fallStepCount = 0;
+    this.standHold = true;
 
     this.container = document.createElement( 'div' );
     document.body.appendChild( this.container );
@@ -135,6 +136,8 @@ export class MuJoCoDemo {
 
       // P key: toggle ONNX policy
       if (e.code === 'KeyP') this.togglePolicy();
+      // T key: toggle stand-hold mode
+      if (e.code === 'KeyT') this.toggleStandHold();
 
       // R key: reset robot to home keyframe
       if (e.code === 'KeyR') this.resetToHome();
@@ -157,6 +160,7 @@ export class MuJoCoDemo {
     // Expose actions for on-screen buttons
     window._demoActions = {
       togglePolicy: () => this.togglePolicy(),
+      toggleStand: () => this.toggleStandHold(),
       resetPose: () => this.resetToHome(),
       togglePause: () => { this.params.paused = !this.params.paused; },
       headUp: () => {
@@ -173,6 +177,7 @@ export class MuJoCoDemo {
   }
 
   togglePolicy() {
+    if (this.standHold) return;
     if (!this.onnxController) return;
     this.onnxController.enabled = !this.onnxController.enabled;
     if (!this.onnxController.enabled) {
@@ -203,6 +208,33 @@ export class MuJoCoDemo {
     }
   }
 
+  toggleStandHold() {
+    this.standHold = !this.standHold;
+    if (this.onnxController) {
+      if (this.standHold) {
+        this.onnxController.enabled = false;
+      } else {
+        this.onnxController.reset();
+        this.onnxController.enabled = true;
+      }
+      this.updatePolicyUI();
+    }
+    this.updateStandUI();
+  }
+
+  updateStandUI() {
+    const btn = document.getElementById('btn-stand');
+    const btnMobile = document.getElementById('btn-stand-mobile');
+    if (btn) {
+      btn.textContent = this.standHold ? 'T: Stand ON' : 'T: Stand OFF';
+      btn.className = this.standHold ? 'action-btn active' : 'action-btn warn';
+    }
+    if (btnMobile) {
+      btnMobile.textContent = this.standHold ? 'Stand ON' : 'Stand OFF';
+      btnMobile.className = this.standHold ? 'mbtn on' : 'mbtn';
+    }
+  }
+
   resetToHome() {
     if (this.model.nkey > 0) {
       const nq = this.model.nq;
@@ -220,7 +252,7 @@ export class MuJoCoDemo {
       }
       if (this.onnxController) {
         this.onnxController.reset();
-        this.onnxController.enabled = true;
+        this.onnxController.enabled = !this.standHold;
         this.updatePolicyUI();
       }
       this.fallStepCount = 0;
@@ -345,8 +377,9 @@ export class MuJoCoDemo {
         }
       }
       if (loaded) {
-        this.onnxController.enabled = true;
+        this.onnxController.enabled = !this.standHold;
         this.updatePolicyUI();
+        this.updateStandUI();
         try {
           // mjOBJ_BODY = 1
           this.startupLiftBodyId = mujoco.mj_name2id(this.model, 1, 'trunk_assembly');
@@ -395,7 +428,7 @@ export class MuJoCoDemo {
         this.onnxController.enabled = false;
         this.policyAutoPausedForDrag = true;
         this.updatePolicyUI();
-      } else if (!dragActive && this.policyAutoPausedForDrag) {
+      } else if (!dragActive && this.policyAutoPausedForDrag && !this.standHold) {
         this.onnxController.enabled = true;
         this.policyAutoPausedForDrag = false;
         this.updatePolicyUI();
@@ -456,11 +489,16 @@ export class MuJoCoDemo {
           this.resetToHome();
         }
 
+        // Stand-hold mode: keep home actuator targets each step.
+        if (this.standHold && this.model.key_ctrl) {
+          this.data.ctrl.set(this.model.key_ctrl.slice(0, this.model.nu));
+        }
+
         mujoco.mj_step(this.model, this.data);
         this.accumulator -= timestepMs;
 
         // Run policy synchronously at decimation boundary
-        if (this.onnxController && this.onnxController.enabled && this.onnxController.session) {
+        if (!this.standHold && this.onnxController && this.onnxController.enabled && this.onnxController.session) {
           this.onnxController.stepCounter++;
           if (this.onnxController.stepCounter % this.onnxController.decimation === 0) {
             await this.onnxController.runPolicy();
@@ -531,7 +569,7 @@ export class MuJoCoDemo {
       if (elR) { elR.textContent = contacts[1] ? 'Y' : 'N'; elR.style.color = contacts[1] ? '#4caf50' : '#666'; }
       const elNeck = document.getElementById('stat-neck');
       if (elStep) elStep.textContent = this.onnxController.policyStepCount;
-      if (elSpeed) elSpeed.textContent = Math.abs(this.onnxController.commands[0]).toFixed(2);
+      if (elSpeed) elSpeed.textContent = this.standHold ? '0.00' : Math.abs(this.onnxController.commands[0]).toFixed(2);
       if (elNeck) elNeck.textContent = this.onnxController.commands[3].toFixed(1);
       if (elPause) {
         if (this.params.paused) {

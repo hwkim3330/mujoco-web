@@ -316,11 +316,6 @@ export class MuJoCoDemo {
           mujoco.mj_applyFT(this.model, this.data, [force.x, force.y, force.z], [0, 0, 0], [point.x, point.y, point.z], bodyID, this.data.qfrc_applied);
         }
 
-        // Apply manual position servo (bypasses broken mujoco-js actuator model)
-        if (this.onnxController && this.onnxController.enabled) {
-          this.onnxController.applyTorques();
-        }
-
         // Physics step
         mujoco.mj_step(this.model, this.data);
         this.accumulator -= timestepMs;

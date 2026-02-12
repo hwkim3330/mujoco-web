@@ -268,24 +268,14 @@ export class OnnxController {
   }
 
   /**
-   * Apply position servo forces manually via qfrc_applied.
-   * Bypasses the MuJoCo actuator model entirely — works regardless of biastype.
-   * Called at EVERY physics step (not just policy steps).
+   * Apply position servo at every physics step.
+   * Sets ctrl = position error so that with biastype=0: F = kp * (target - qpos).
+   * The actuator's forcerange naturally clamps the output.
    */
   applyTorques() {
-    const kp = 13.37;
-    const forceLimit = 3.23;
     const ctrl = this.data.ctrl;
-
     for (let i = 0; i < this.numDofs; i++) {
-      const qpos_i = this.data.qpos[this.qposIndices[i]];
-      // Neutralize the MuJoCo actuator by setting ctrl = current joint position
-      // This makes actuator force ≈ 0 regardless of biastype (0 or 1)
-      ctrl[i] = qpos_i;
-      // Apply position servo force manually
-      const error = this.motorTargets[i] - qpos_i;
-      this.data.qfrc_applied[this.qvelIndices[i]] +=
-        Math.max(-forceLimit, Math.min(forceLimit, kp * error));
+      ctrl[i] = this.motorTargets[i] - this.data.qpos[this.qposIndices[i]];
     }
   }
 
@@ -512,7 +502,12 @@ export class OnnxController {
         this.prevMotorTargets[i] = this.motorTargets[i];
       }
 
-      // Motor targets updated — applyTorques() will use them at each physics step
+      // Apply to ctrl (persists for next decimation steps)
+      const ctrl = this.data.ctrl;
+      for (let i = 0; i < Math.min(this.numDofs, ctrl.length); i++) {
+        ctrl[i] = this.motorTargets[i];
+      }
+
       if (this.policyStepCount <= 3) {
         const tgtStr = Array.from(this.motorTargets).slice(0, 5).map(v => v.toFixed(3));
         console.log(`  targets=[${tgtStr}...]`);

@@ -43,6 +43,8 @@ export class OnnxController {
 
     // Commands [lin_vel_x, lin_vel_y, ang_vel, neck_pitch, head_pitch, head_yaw, head_roll]
     this.commands = [0, 0, 0, 0, 0, 0, 0];
+    this.defaultForwardCommand = 0.1;
+    this.defaultNeckPitchCommand = 0.55;
 
     // Imitation phase: period=0.54s, fps=50Hz → nb_steps_in_period=27
     // Verified from upstream polynomial_coefficients.pkl data
@@ -135,10 +137,10 @@ export class OnnxController {
     }
 
     // Start with a small forward velocity so the duck walks automatically
-    this.commands[0] = 0.1;
-    // Set head slightly upward to prevent backward lean
+    this.commands[0] = this.defaultForwardCommand;
+    // Keep neck pitched up at startup to prevent immediate backward fall.
     // commands[3]=neck_pitch, commands[4]=head_pitch
-    this.commands[3] = 0.3;
+    this.commands[3] = this.defaultNeckPitchCommand;
 
     console.log('Default actuator:', Array.from(this.defaultActuator).map(v => v.toFixed(3)));
     console.log('Default command: forward velocity =', this.commands[0]);
@@ -528,7 +530,7 @@ export class OnnxController {
 
     this.imitationI = 0;
     this.imitationPhase = [0, 0];
-    this.commands = [0.1, 0, 0, 0.3, 0, 0, 0]; // Forward walk + head up
+    this.commands = [this.defaultForwardCommand, 0, 0, this.defaultNeckPitchCommand, 0, 0, 0];
     this.stepCounter = 0;
     this.policyStepCount = 0;
 

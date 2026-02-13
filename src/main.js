@@ -334,9 +334,16 @@ export class MuJoCoDemo {
       this.model.opt.iterations = 40;
       this.mujoco.mj_forward(this.model, this.data);
       // Warm up physics to settle contacts
-      for (let i = 0; i < 300; i++) {
+      for (let i = 0; i < 120; i++) {
         this.mujoco.mj_step(this.model, this.data);
       }
+      // Re-apply exact home keyframe to avoid ending reset in a collapsed pose.
+      this.data.qpos.set(this.model.key_qpos.slice(0, nq));
+      for (let i = 0; i < nv; i++) this.data.qvel[i] = 0;
+      if (this.model.key_ctrl) {
+        this.data.ctrl.set(this.model.key_ctrl.slice(0, this.model.nu));
+      }
+      this.mujoco.mj_forward(this.model, this.data);
       if (this.onnxController) {
         this.onnxController.reset();
         this.onnxController.enabled = !this.standHold;
@@ -347,7 +354,7 @@ export class MuJoCoDemo {
       // Reset timing to avoid burst of steps
       this.lastRenderTime = undefined;
       this.accumulator = 0;
-      console.log('Reset to home keyframe (warm-up 300, iterations=40)');
+      console.log('Reset to home keyframe (warm-up 120 + exact keyframe restore, iterations=40)');
     }
   }
 

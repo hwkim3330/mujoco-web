@@ -507,8 +507,15 @@ export class MuJoCoDemo {
 
         const fallen = this.isRobotFallen();
         this.fallStepCount = fallen ? this.fallStepCount + 1 : 0;
-        if (this.fallStepCount > 300) {
+        // If it has clearly fallen, stop policy flailing and recover to stand mode.
+        if (this.fallStepCount > 60) {
           this.fallStepCount = 0;
+          this.standHold = true;
+          if (this.onnxController) {
+            this.onnxController.enabled = false;
+          }
+          this.updatePolicyUI();
+          this.updateStandUI();
           this.resetToHome();
         }
         if (!this.standHold && this.autoKickStepsRemaining > 0) {

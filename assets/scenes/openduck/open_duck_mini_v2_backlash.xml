@@ -211,7 +211,7 @@
                     mesh="foot_bottom_tpu" material="foot_bottom_tpu_material"/>
                   <geom type="mesh" class="collision" pos="0.01656 0.2228 0.10955"
                     quat="0.707107 -0.707107 -0 1.72496e-18" mesh="foot_bottom_tpu" material="foot_bottom_tpu_material"
-                    name="left_foot_bottom_tpu"/>
+                    name="left_foot_bottom_tpu" contype="1" conaffinity="1" condim="6" friction="2.0 0.05 0.01"/>
                   <!-- Part foot_bottom_pla -->
                   <geom type="mesh" class="visual" pos="0.01656 0.2228 0.10955" quat="0.707107 -0.707107 -0 1.72496e-18"
                     mesh="foot_bottom_pla" material="foot_bottom_pla_material"/>
@@ -424,7 +424,7 @@
                     quat="0.707107 -0.707107 -0 -8.61814e-30" mesh="foot_bottom_tpu" material="foot_bottom_tpu_material"/>
                   <geom type="mesh" class="collision" pos="0.01656 0.2228 0.10955"
                     quat="0.707107 -0.707107 -0 -8.61814e-30" mesh="foot_bottom_tpu" material="foot_bottom_tpu_material"
-                    name="right_foot_bottom_tpu"/>
+                    name="right_foot_bottom_tpu" contype="1" conaffinity="1" condim="6" friction="2.0 0.05 0.01"/>
                   <!-- Part foot_bottom_pla_2 -->
                   <geom type="mesh" class="visual" pos="0.01656 0.2228 0.10955"
                     quat="0.707107 -0.707107 -0 -8.61814e-30" mesh="foot_bottom_pla" material="foot_bottom_pla_material"/>

@@ -42,7 +42,9 @@ export class MuJoCoDemo {
     this.policyAutoPausedForDrag = false;
     this.startupLiftBodyId = -1;
     this.fallStepCount = 0;
-    this.standHold = true;
+    this.standHold = false;
+    this.autoKickTotalSteps = 500; // ~1.0s at dt=0.002
+    this.autoKickStepsRemaining = this.autoKickTotalSteps;
 
     this.container = document.createElement( 'div' );
     document.body.appendChild( this.container );
@@ -256,6 +258,7 @@ export class MuJoCoDemo {
         this.updatePolicyUI();
       }
       this.fallStepCount = 0;
+      this.autoKickStepsRemaining = this.autoKickTotalSteps;
       // Reset timing to avoid burst of steps
       this.lastRenderTime = undefined;
       this.accumulator = 0;
@@ -265,8 +268,17 @@ export class MuJoCoDemo {
 
   updateRobotCommand() {
     // WASD / Arrow keys for movement
-    // Default: conservative forward walk
+    // Default: conservative forward walk with startup kick for dynamic balance.
     let x = 0.03, y = 0, rot = 0;
+    const manualMove =
+      this.keysPressed['KeyW'] || this.keysPressed['ArrowUp'] ||
+      this.keysPressed['KeyS'] || this.keysPressed['ArrowDown'] ||
+      this.keysPressed['KeyA'] || this.keysPressed['ArrowLeft'] ||
+      this.keysPressed['KeyD'] || this.keysPressed['ArrowRight'];
+    if (!manualMove && !this.standHold && this.autoKickStepsRemaining > 0) {
+      const a = this.autoKickStepsRemaining / this.autoKickTotalSteps;
+      x = 0.03 + 0.07 * a; // 0.10 -> 0.03 over ~1s
+    }
 
     if (this.keysPressed['KeyW'] || this.keysPressed['ArrowUp']) x = 0.10;
     if (this.keysPressed['KeyS'] || this.keysPressed['ArrowDown']) x = -0.15;
@@ -297,7 +309,7 @@ export class MuJoCoDemo {
     const q = this.data.qpos;
     const sinp = 2 * (q[3] * q[5] - q[6] * q[4]);
     const pitch = Math.asin(Math.max(-1, Math.min(1, sinp))) * 180 / Math.PI;
-    return h < 0.10 || Math.abs(pitch) > 65;
+    return h < 0.07 || Math.abs(pitch) > 75;
   }
 
   async init() {
@@ -380,6 +392,7 @@ export class MuJoCoDemo {
         this.onnxController.enabled = !this.standHold;
         this.updatePolicyUI();
         this.updateStandUI();
+        this.autoKickStepsRemaining = this.autoKickTotalSteps;
         try {
           // mjOBJ_BODY = 1
           this.startupLiftBodyId = mujoco.mj_name2id(this.model, 1, 'trunk_assembly');
@@ -494,9 +507,12 @@ export class MuJoCoDemo {
 
         const fallen = this.isRobotFallen();
         this.fallStepCount = fallen ? this.fallStepCount + 1 : 0;
-        if (this.fallStepCount > 15) {
+        if (this.fallStepCount > 300) {
           this.fallStepCount = 0;
           this.resetToHome();
+        }
+        if (!this.standHold && this.autoKickStepsRemaining > 0) {
+          this.autoKickStepsRemaining--;
         }
 
         mujoco.mj_step(this.model, this.data);

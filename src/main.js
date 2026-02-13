@@ -436,6 +436,16 @@ export class MuJoCoDemo {
     }
 
     if (!this.params["paused"]) {
+      if (this.standHold && this.model.nkey > 0) {
+        const nq = this.model.nq;
+        const nv = this.model.nv;
+        this.data.qpos.set(this.model.key_qpos.slice(0, nq));
+        for (let i = 0; i < nv; i++) this.data.qvel[i] = 0;
+        if (this.model.key_ctrl) {
+          this.data.ctrl.set(this.model.key_ctrl.slice(0, this.model.nu));
+        }
+        mujoco.mj_forward(this.model, this.data);
+      } else {
       let timestep = this.model.opt.timestep;
       let timestepMs = timestep * 1000.0;
 
@@ -489,21 +499,17 @@ export class MuJoCoDemo {
           this.resetToHome();
         }
 
-        // Stand-hold mode: keep home actuator targets each step.
-        if (this.standHold && this.model.key_ctrl) {
-          this.data.ctrl.set(this.model.key_ctrl.slice(0, this.model.nu));
-        }
-
         mujoco.mj_step(this.model, this.data);
         this.accumulator -= timestepMs;
 
         // Run policy synchronously at decimation boundary
-        if (!this.standHold && this.onnxController && this.onnxController.enabled && this.onnxController.session) {
+        if (this.onnxController && this.onnxController.enabled && this.onnxController.session) {
           this.onnxController.stepCounter++;
           if (this.onnxController.stepCounter % this.onnxController.decimation === 0) {
             await this.onnxController.runPolicy();
           }
         }
+      }
       }
 
     } else if (this.params["paused"]) {

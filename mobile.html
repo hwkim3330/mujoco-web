@@ -181,6 +181,7 @@
         <!-- Top Bar -->
         <div id="topbar">
             <span><span class="dot green" id="policy-dot"></span><span class="val" id="policy-label">ONNX</span></span>
+            <span><select id="scene-select-mobile" onchange="selectScene(this.value)" style="background:#111; color:#eee; border:1px solid #333; border-radius:6px; padding:2px 4px; font-size:10px; max-width:140px;"></select></span>
             <span><span class="lbl">H </span><span class="val" id="stat-height">--</span></span>
             <span><span class="lbl">L </span><span class="val" id="stat-left">-</span><span class="lbl"> R </span><span class="val" id="stat-right">-</span></span>
             <span><span class="lbl">neck </span><span class="val" id="stat-neck">0.1</span></span>
@@ -234,6 +235,9 @@
             function togglePolicy(e) {
                 if (e) e.preventDefault();
                 if (window._demoActions) window._demoActions.togglePolicy();
+            }
+            function selectScene(scene) {
+                if (window._demoActions) window._demoActions.selectScene(scene);
             }
             function toggleStand(e) {
                 if (e) e.preventDefault();

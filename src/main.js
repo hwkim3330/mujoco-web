@@ -38,13 +38,21 @@ export class MuJoCoDemo {
     this.robotCommand = { x: 0, y: 0, rot: 0 };
     this.keysPressed = {};
     this.cameraOffset = new THREE.Vector3(0.5, 0.4, 0.5);
-    this.dragForceScale = 2000;
+    this.dragForceScale = 900;
     this.policyAutoPausedForDrag = false;
     this.startupLiftBodyId = -1;
     this.fallStepCount = 0;
     this.standHold = false;
     this.autoKickTotalSteps = 500; // ~1.0s at dt=0.002
     this.autoKickStepsRemaining = this.autoKickTotalSteps;
+    this.switchingScene = false;
+    this.sceneOptions = [
+      'openduck/scene_flat_terrain_backlash.xml',
+      'humanoid.xml',
+      'agility_cassie/scene.xml',
+      'car.xml',
+      'shadow_hand/scene_right.xml'
+    ];
 
     this.container = document.createElement( 'div' );
     document.body.appendChild( this.container );
@@ -94,6 +102,8 @@ export class MuJoCoDemo {
     this.startAnimationLoop();
 
     this.container.appendChild( this.renderer.domElement );
+    // Keep right-click available for camera controls.
+    this.renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.target.set(0, 0.7, 0);
@@ -164,6 +174,7 @@ export class MuJoCoDemo {
       togglePolicy: () => this.togglePolicy(),
       toggleStand: () => this.toggleStandHold(),
       resetPose: () => this.resetToHome(),
+      selectScene: (scene) => this.switchScene(scene),
       togglePause: () => { this.params.paused = !this.params.paused; },
       headUp: () => {
         if (this.onnxController) {
@@ -196,17 +207,24 @@ export class MuJoCoDemo {
     const label = document.getElementById('policy-label');
     const btn = document.getElementById('btn-policy');
     const btnMobile = document.getElementById('btn-policy-mobile');
-    if (!this.onnxController) return;
+    const mobileUsesMbtn = !!(btnMobile && btnMobile.classList.contains('mbtn'));
+    if (!this.onnxController) {
+      if (dot) { dot.className = 'dot yellow'; }
+      if (label) label.textContent = 'N/A';
+      if (btn) { btn.textContent = 'P: Policy N/A'; btn.className = 'action-btn warn'; }
+      if (btnMobile) { btnMobile.textContent = 'Policy N/A'; btnMobile.className = mobileUsesMbtn ? 'mbtn' : 'action-btn warn'; }
+      return;
+    }
     if (this.onnxController.enabled) {
       if (dot) { dot.className = 'dot green'; }
       if (label) label.textContent = 'ONNX';
       if (btn) { btn.textContent = 'P: Policy ON'; btn.className = 'action-btn active'; }
-      if (btnMobile) { btnMobile.textContent = 'Policy ON'; btnMobile.className = 'action-btn active'; }
+      if (btnMobile) { btnMobile.textContent = 'Policy ON'; btnMobile.className = mobileUsesMbtn ? 'mbtn on' : 'action-btn active'; }
     } else {
       if (dot) { dot.className = 'dot yellow'; }
       if (label) label.textContent = 'OFF';
       if (btn) { btn.textContent = 'P: Policy OFF'; btn.className = 'action-btn warn'; }
-      if (btnMobile) { btnMobile.textContent = 'Policy OFF'; btnMobile.className = 'action-btn warn'; }
+      if (btnMobile) { btnMobile.textContent = 'Policy OFF'; btnMobile.className = mobileUsesMbtn ? 'mbtn' : 'action-btn warn'; }
     }
   }
 
@@ -227,13 +245,80 @@ export class MuJoCoDemo {
   updateStandUI() {
     const btn = document.getElementById('btn-stand');
     const btnMobile = document.getElementById('btn-stand-mobile');
+    const mobileUsesMbtn = !!(btnMobile && btnMobile.classList.contains('mbtn'));
     if (btn) {
       btn.textContent = this.standHold ? 'T: Stand ON' : 'T: Stand OFF';
       btn.className = this.standHold ? 'action-btn active' : 'action-btn warn';
     }
     if (btnMobile) {
       btnMobile.textContent = this.standHold ? 'Stand ON' : 'Stand OFF';
-      btnMobile.className = this.standHold ? 'mbtn on' : 'mbtn';
+      btnMobile.className = this.standHold
+        ? (mobileUsesMbtn ? 'mbtn on' : 'action-btn active')
+        : (mobileUsesMbtn ? 'mbtn' : 'action-btn warn');
+    }
+  }
+
+  updateSceneUI() {
+    const selectDesktop = document.getElementById('scene-select');
+    const selectMobile = document.getElementById('scene-select-mobile');
+    if (selectDesktop) selectDesktop.value = this.params.scene;
+    if (selectMobile) selectMobile.value = this.params.scene;
+  }
+
+  setupSceneSelector() {
+    const makeOptions = (selectEl) => {
+      if (!selectEl) return;
+      selectEl.innerHTML = '';
+      for (const scene of this.sceneOptions) {
+        const opt = document.createElement('option');
+        opt.value = scene;
+        opt.textContent = scene;
+        selectEl.appendChild(opt);
+      }
+    };
+    const selectDesktop = document.getElementById('scene-select');
+    const selectMobile = document.getElementById('scene-select-mobile');
+    makeOptions(selectDesktop);
+    makeOptions(selectMobile);
+    this.updateSceneUI();
+  }
+
+  async switchScene(scenePath) {
+    if (!scenePath || this.switchingScene || scenePath === this.params.scene) return;
+    this.switchingScene = true;
+    try {
+      this.params.scene = scenePath;
+      [this.model, this.data, this.bodies, this.lights] =
+        await loadSceneFromURL(mujoco, scenePath, this);
+
+      if (scenePath.includes('openduck')) {
+        if (this.model.nkey > 0) {
+          const nq = this.model.nq;
+          const nv = this.model.nv;
+          const nu = this.model.nu;
+          this.model.opt.iterations = 40;
+          this.data.qpos.set(this.model.key_qpos.slice(0, nq));
+          for (let i = 0; i < nv; i++) this.data.qvel[i] = 0;
+          if (this.model.key_ctrl) this.data.ctrl.set(this.model.key_ctrl.slice(0, nu));
+          mujoco.mj_forward(this.model, this.data);
+          for (let i = 0; i < 300; i++) mujoco.mj_step(this.model, this.data);
+        }
+        this.standHold = false;
+        await this.initOnnxController();
+      } else {
+        this.onnxController = null;
+        this.standHold = false;
+        this.updatePolicyUI();
+        this.updateStandUI();
+      }
+      this.fallStepCount = 0;
+      this.autoKickStepsRemaining = this.autoKickTotalSteps;
+      this.lastRenderTime = undefined;
+      this.accumulator = 0;
+      this.updateSceneUI();
+      this.updateRobotCommand();
+    } finally {
+      this.switchingScene = false;
     }
   }
 
@@ -367,6 +452,8 @@ export class MuJoCoDemo {
 
     // Initialize ONNX controller
     await this.initOnnxController();
+
+    this.setupSceneSelector();
 
     this.gui = new GUI();
     setupGUI(this);
@@ -505,18 +592,20 @@ export class MuJoCoDemo {
           mujoco.mj_applyFT(this.model, this.data, [force.x, force.y, force.z], [0, 0, 0], [point.x, point.y, point.z], bodyID, this.data.qfrc_applied);
         }
 
-        const fallen = this.isRobotFallen();
-        this.fallStepCount = fallen ? this.fallStepCount + 1 : 0;
-        // If it has clearly fallen, stop policy flailing and recover to stand mode.
-        if (this.fallStepCount > 60) {
-          this.fallStepCount = 0;
-          this.standHold = true;
-          if (this.onnxController) {
-            this.onnxController.enabled = false;
+        if (this.params.scene.includes('openduck')) {
+          const fallen = this.isRobotFallen();
+          this.fallStepCount = fallen ? this.fallStepCount + 1 : 0;
+          // If it has clearly fallen, stop policy flailing and recover to stand mode.
+          if (this.fallStepCount > 60) {
+            this.fallStepCount = 0;
+            this.standHold = true;
+            if (this.onnxController) {
+              this.onnxController.enabled = false;
+            }
+            this.updatePolicyUI();
+            this.updateStandUI();
+            this.resetToHome();
           }
-          this.updatePolicyUI();
-          this.updateStandUI();
-          this.resetToHome();
         }
         if (!this.standHold && this.autoKickStepsRemaining > 0) {
           this.autoKickStepsRemaining--;

@@ -103,14 +103,18 @@ export class DragStateManager {
     }
     onPointer(evt) {
         if (evt.type == "pointerdown") {
+            // Only left button should start physics drag.
+            if (evt.button !== 0) { return; }
             this.start(evt.clientX, evt.clientY);
             this.mouseDown = true;
         } else if (evt.type == "pointermove" && this.mouseDown) {
             if (this.active) { this.move(evt.clientX, evt.clientY); }
         } else if (evt.type == "pointerup" /*|| evt.type == "pointerout"*/) {
+            if (evt.button !== 0 && !this.active) { return; }
             this.end(evt);
         }
         if (evt.type == "dblclick") {
+            if (evt.button !== 0) { return; }
             this.start(evt.clientX, evt.clientY);
             this.doubleClick = true;
             if (this.physicsObject) {

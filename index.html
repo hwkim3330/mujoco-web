@@ -263,6 +263,7 @@
         <!-- Status Bar -->
         <div id="status-bar">
             <span><span class="dot green" id="policy-dot"></span><span id="policy-label">ONNX</span></span>
+            <span><select id="scene-select" onchange="selectScene(this.value)" style="background:#111; color:#eee; border:1px solid #333; border-radius:6px; padding:4px 6px; font-size:11px; max-width:230px;"></select></span>
             <span><span class="stat-label">H </span><span class="stat-value" id="stat-height">--</span></span>
             <span><span class="stat-label">L </span><span class="stat-value" id="stat-left">-</span><span class="stat-label"> R </span><span class="stat-value" id="stat-right">-</span></span>
             <span><span class="stat-label">neck </span><span class="stat-value" id="stat-neck">0.1</span></span>
@@ -339,6 +340,9 @@
             // These get wired up by main.js via window._demoActions
             function togglePolicy() {
                 if (window._demoActions) window._demoActions.togglePolicy();
+            }
+            function selectScene(scene) {
+                if (window._demoActions) window._demoActions.selectScene(scene);
             }
             function toggleStand() {
                 if (window._demoActions) window._demoActions.toggleStand();

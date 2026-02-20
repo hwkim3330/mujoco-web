@@ -55,6 +55,23 @@ export async function reloadFunc() {
     this.onnxController.enabled = false;
   }
 
+  // Reinitialize Go2 CPG controller if loading Go2 scene
+  if (this.params.scene.includes('unitree_go2')) {
+    if (this.onnxController) this.onnxController.enabled = false;
+    // Import dynamically or use existing reference
+    if (this.go2Controller) {
+      this.go2Controller.model = this.model;
+      this.go2Controller.data = this.data;
+      this.go2Controller.findJointAddresses();
+      this.go2Controller.findFootGeoms();
+      this.go2Controller.reset();
+      this.go2Controller.enabled = true;
+      console.log('Go2 CPG controller reinitialized');
+    }
+  } else if (this.go2Controller) {
+    this.go2Controller.enabled = false;
+  }
+
   for (let i = 0; i < this.updateGUICallbacks.length; i++) {
     this.updateGUICallbacks[i](this.model, this.data, this.params);
   }
@@ -70,6 +87,9 @@ export function setupGUI(parentContext) {
     if (params.scene.includes('openduck')) {
       parentContext.camera.position.set(0.5, 0.4, 0.5);
       parentContext.controls.target.set(0, 0.15, 0);
+    } else if (params.scene.includes('unitree_go2')) {
+      parentContext.camera.position.set(1.2, 0.8, 1.2);
+      parentContext.controls.target.set(0, 0.27, 0);
     } else {
       parentContext.camera.position.set(2.0, 1.7, 1.7);
       parentContext.controls.target.set(0, 0.7, 0);
@@ -81,6 +101,7 @@ export function setupGUI(parentContext) {
   parentContext.gui.add(parentContext.params, 'scene', {
     "OpenDuck Mini": "openduck/scene_flat_terrain.xml",
     "OpenDuck (Backlash)": "openduck/scene_flat_terrain_backlash.xml",
+    "Unitree Go2": "unitree_go2/scene.xml",
     "Humanoid": "humanoid.xml", "Cassie": "agility_cassie/scene.xml",
     "Hammock": "hammock.xml", "Balloons": "balloons.xml", "Hand": "shadow_hand/scene_right.xml",
     "Mug": "mug.xml", "Tendon": "model_with_tendon.xml",
@@ -757,6 +778,25 @@ export async function downloadExampleScenesFolder(mujoco) {
     "openduck/assets/roll_motor_top.stl",
     "openduck/assets/trunk_bottom.stl",
     "openduck/assets/trunk_top.stl",
+    // Unitree Go2 files
+    "unitree_go2/go2.xml",
+    "unitree_go2/scene.xml",
+    "unitree_go2/assets/base_0.obj",
+    "unitree_go2/assets/base_1.obj",
+    "unitree_go2/assets/base_2.obj",
+    "unitree_go2/assets/base_3.obj",
+    "unitree_go2/assets/base_4.obj",
+    "unitree_go2/assets/hip_0.obj",
+    "unitree_go2/assets/hip_1.obj",
+    "unitree_go2/assets/thigh_0.obj",
+    "unitree_go2/assets/thigh_1.obj",
+    "unitree_go2/assets/thigh_mirror_0.obj",
+    "unitree_go2/assets/thigh_mirror_1.obj",
+    "unitree_go2/assets/calf_0.obj",
+    "unitree_go2/assets/calf_1.obj",
+    "unitree_go2/assets/calf_mirror_0.obj",
+    "unitree_go2/assets/calf_mirror_1.obj",
+    "unitree_go2/assets/foot.obj",
     // Other scenes
     "22_humanoids.xml",
     "adhesion.xml",

@@ -6,6 +6,7 @@ import { DragStateManager } from './utils/DragStateManager.js';
 import { setupGUI, downloadExampleScenesFolder, loadSceneFromURL, drawTendonsAndFlex, getPosition, getQuaternion, toMujocoPos, standardNormal } from './mujocoUtils.js';
 import   load_mujoco        from 'https://cdn.jsdelivr.net/npm/mujoco-js@0.0.7/dist/mujoco_wasm.js';
 import { OnnxController   } from './onnxController.js';
+import { Go2CpgController } from './go2CpgController.js';
 
 // Load the MuJoCo Module
 const mujoco = await load_mujoco();
@@ -48,11 +49,13 @@ export class MuJoCoDemo {
     this.switchingScene = false;
     this.sceneOptions = [
       'openduck/scene_flat_terrain_backlash.xml',
+      'unitree_go2/scene.xml',
       'humanoid.xml',
       'agility_cassie/scene.xml',
       'car.xml',
       'shadow_hand/scene_right.xml'
     ];
+    this.go2Controller = null;
 
     this.container = document.createElement( 'div' );
     document.body.appendChild( this.container );
@@ -136,7 +139,8 @@ export class MuJoCoDemo {
     const keyMap = {
       'KeyW': 'key-w', 'KeyA': 'key-a', 'KeyS': 'key-s', 'KeyD': 'key-d',
       'KeyQ': 'key-q', 'KeyE': 'key-e',
-      'ArrowUp': 'key-w', 'ArrowDown': 'key-s', 'ArrowLeft': 'key-a', 'ArrowRight': 'key-d'
+      'ArrowUp': 'key-w', 'ArrowDown': 'key-s', 'ArrowLeft': 'key-a', 'ArrowRight': 'key-d',
+      'Digit1': 'key-1', 'Digit2': 'key-2', 'Digit3': 'key-3', 'Digit4': 'key-4'
     };
 
     document.addEventListener('keydown', (e) => {
@@ -158,6 +162,14 @@ export class MuJoCoDemo {
       if (e.code === 'Space') {
         this.params.paused = !this.params.paused;
         e.preventDefault();
+      }
+
+      // Digit 1-4: Go2 tricks
+      if (this.go2Controller && this.go2Controller.enabled) {
+        if (e.code === 'Digit1') this.go2Controller.triggerTrick('jump');
+        if (e.code === 'Digit2') this.go2Controller.triggerTrick('frontflip');
+        if (e.code === 'Digit3') this.go2Controller.triggerTrick('backflip');
+        if (e.code === 'Digit4') this.go2Controller.triggerTrick('sideroll');
       }
 
       this.updateRobotCommand();
@@ -191,6 +203,17 @@ export class MuJoCoDemo {
 
   togglePolicy() {
     if (this.standHold) return;
+    if (this.go2Controller) {
+      this.go2Controller.enabled = !this.go2Controller.enabled;
+      if (!this.go2Controller.enabled) {
+        this.go2Controller.reset();
+        console.log('Go2 CPG DISABLED');
+      } else {
+        console.log('Go2 CPG ENABLED');
+      }
+      this.updatePolicyUI();
+      return;
+    }
     if (!this.onnxController) return;
     this.onnxController.enabled = !this.onnxController.enabled;
     if (!this.onnxController.enabled) {
@@ -208,6 +231,23 @@ export class MuJoCoDemo {
     const btn = document.getElementById('btn-policy');
     const btnMobile = document.getElementById('btn-policy-mobile');
     const mobileUsesMbtn = !!(btnMobile && btnMobile.classList.contains('mbtn'));
+
+    // Check Go2 controller first
+    if (this.go2Controller) {
+      if (this.go2Controller.enabled) {
+        if (dot) { dot.className = 'dot green'; }
+        if (label) label.textContent = 'CPG';
+        if (btn) { btn.textContent = 'P: CPG ON'; btn.className = 'action-btn active'; }
+        if (btnMobile) { btnMobile.textContent = 'CPG ON'; btnMobile.className = mobileUsesMbtn ? 'mbtn on' : 'action-btn active'; }
+      } else {
+        if (dot) { dot.className = 'dot yellow'; }
+        if (label) label.textContent = 'OFF';
+        if (btn) { btn.textContent = 'P: CPG OFF'; btn.className = 'action-btn warn'; }
+        if (btnMobile) { btnMobile.textContent = 'CPG OFF'; btnMobile.className = mobileUsesMbtn ? 'mbtn' : 'action-btn warn'; }
+      }
+      return;
+    }
+
     if (!this.onnxController) {
       if (dot) { dot.className = 'dot yellow'; }
       if (label) label.textContent = 'N/A';
@@ -230,7 +270,15 @@ export class MuJoCoDemo {
 
   toggleStandHold() {
     this.standHold = !this.standHold;
-    if (this.onnxController) {
+    if (this.go2Controller) {
+      if (this.standHold) {
+        this.go2Controller.enabled = false;
+      } else {
+        this.go2Controller.reset();
+        this.go2Controller.enabled = true;
+      }
+      this.updatePolicyUI();
+    } else if (this.onnxController) {
       if (this.standHold) {
         this.onnxController.enabled = false;
       } else {
@@ -291,6 +339,10 @@ export class MuJoCoDemo {
       [this.model, this.data, this.bodies, this.lights] =
         await loadSceneFromURL(mujoco, scenePath, this);
 
+      // Hide trick keys panel when switching away from Go2
+      const trickKeysEl = document.getElementById('trick-keys');
+      if (trickKeysEl) trickKeysEl.style.display = 'none';
+
       if (scenePath.includes('openduck')) {
         if (this.model.nkey > 0) {
           const nq = this.model.nq;
@@ -303,10 +355,17 @@ export class MuJoCoDemo {
           mujoco.mj_forward(this.model, this.data);
           for (let i = 0; i < 300; i++) mujoco.mj_step(this.model, this.data);
         }
+        this.go2Controller = null;
         this.standHold = false;
         await this.initOnnxController();
+      } else if (scenePath.includes('unitree_go2')) {
+        this.onnxController = null;
+        this.go2Controller = null;
+        this.standHold = false;
+        await this.initGo2Controller();
       } else {
         this.onnxController = null;
+        this.go2Controller = null;
         this.standHold = false;
         this.updatePolicyUI();
         this.updateStandUI();
@@ -344,7 +403,11 @@ export class MuJoCoDemo {
         this.data.ctrl.set(this.model.key_ctrl.slice(0, this.model.nu));
       }
       this.mujoco.mj_forward(this.model, this.data);
-      if (this.onnxController) {
+      if (this.go2Controller) {
+        this.go2Controller.reset();
+        this.go2Controller.enabled = !this.standHold;
+        this.updatePolicyUI();
+      } else if (this.onnxController) {
         this.onnxController.reset();
         this.onnxController.enabled = !this.standHold;
         this.updatePolicyUI();
@@ -379,8 +442,8 @@ export class MuJoCoDemo {
     if (this.keysPressed['KeyQ']) rot += 0.5;
     if (this.keysPressed['KeyE']) rot -= 0.5;
 
-    // 1/2 keys: adjust neck pitch (head up/down)
-    if (this.onnxController) {
+    // 1/2 keys: adjust neck pitch (head up/down) — only for OpenDuck (Go2 uses 1-4 for tricks)
+    if (this.onnxController && !this.go2Controller) {
       if (this.keysPressed['Digit1']) {
         this.onnxController.commands[3] = Math.min(1.0, this.onnxController.commands[3] + 0.02);
       }
@@ -391,7 +454,9 @@ export class MuJoCoDemo {
 
     this.robotCommand = { x, y, rot };
 
-    if (this.onnxController) {
+    if (this.go2Controller) {
+      this.go2Controller.setCommand(x, y, rot);
+    } else if (this.onnxController) {
       this.onnxController.setCommand(x, y, rot);
     }
   }
@@ -519,6 +584,49 @@ export class MuJoCoDemo {
     });
   }
 
+  async initGo2Controller() {
+    // Apply home keyframe
+    if (this.model.nkey > 0) {
+      const nq = this.model.nq;
+      const nv = this.model.nv;
+      const nu = this.model.nu;
+      this.model.opt.iterations = 30;
+      this.data.qpos.set(this.model.key_qpos.slice(0, nq));
+      for (let i = 0; i < nv; i++) this.data.qvel[i] = 0;
+      if (this.model.key_ctrl) this.data.ctrl.set(this.model.key_ctrl.slice(0, nu));
+      mujoco.mj_forward(this.model, this.data);
+      for (let i = 0; i < 200; i++) mujoco.mj_step(this.model, this.data);
+    }
+
+    this.go2Controller = new Go2CpgController(mujoco, this.model, this.data);
+    this.go2Controller.enabled = true;
+    this.onnxController = null;
+
+    // Show trick keys panel
+    const trickKeys = document.getElementById('trick-keys');
+    if (trickKeys) trickKeys.style.display = '';
+
+    // Set camera for Go2 (slightly further than OpenDuck)
+    this.camera.position.set(1.2, 0.8, 1.2);
+    this.controls.target.set(0, 0.27, 0);
+    this.controls.update();
+
+    this.updatePolicyUI();
+    this.updateStandUI();
+
+    // Reset physics timing
+    this.lastRenderTime = undefined;
+    this.accumulator = 0;
+    this.fallStepCount = 0;
+
+    // Hide loading screen
+    const loadingScreen = document.getElementById('loading-screen');
+    if (loadingScreen) loadingScreen.classList.add('hidden');
+    setTimeout(() => { if (loadingScreen) loadingScreen.remove(); }, 600);
+
+    console.log('Go2 CPG controller initialized');
+  }
+
   onWindowResize() {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
@@ -530,7 +638,17 @@ export class MuJoCoDemo {
 
     // Drag assist: pause policy while dragging so manual interaction wins.
     const dragActive = !!(this.dragStateManager && this.dragStateManager.active && this.dragStateManager.physicsObject);
-    if (this.onnxController) {
+    if (this.go2Controller) {
+      if (dragActive && this.go2Controller.enabled && !this.policyAutoPausedForDrag) {
+        this.go2Controller.enabled = false;
+        this.policyAutoPausedForDrag = true;
+        this.updatePolicyUI();
+      } else if (!dragActive && this.policyAutoPausedForDrag && !this.standHold) {
+        this.go2Controller.enabled = true;
+        this.policyAutoPausedForDrag = false;
+        this.updatePolicyUI();
+      }
+    } else if (this.onnxController) {
       if (dragActive && this.onnxController.enabled && !this.policyAutoPausedForDrag) {
         this.onnxController.enabled = false;
         this.policyAutoPausedForDrag = true;
@@ -614,6 +732,21 @@ export class MuJoCoDemo {
             this.resetToHome();
           }
         }
+        // Go2 fall detection (more lenient during tricks)
+        if (this.params.scene.includes('unitree_go2') && this.go2Controller) {
+          const h = this.data.qpos[2] || 0;
+          const isTricking = this.go2Controller.trickPhase !== 'idle';
+          const fallen = !isTricking && (h < 0.08);
+          this.fallStepCount = fallen ? this.fallStepCount + 1 : 0;
+          if (this.fallStepCount > 100) {
+            this.fallStepCount = 0;
+            this.standHold = true;
+            this.go2Controller.enabled = false;
+            this.updatePolicyUI();
+            this.updateStandUI();
+            this.resetToHome();
+          }
+        }
         if (!this.standHold && this.autoKickStepsRemaining > 0) {
           this.autoKickStepsRemaining--;
         }
@@ -626,6 +759,14 @@ export class MuJoCoDemo {
           this.onnxController.stepCounter++;
           if (this.onnxController.stepCounter % this.onnxController.decimation === 0) {
             await this.onnxController.runPolicy();
+          }
+        }
+
+        // Run Go2 CPG controller at decimation boundary
+        if (this.go2Controller && this.go2Controller.enabled) {
+          this.go2Controller.stepCounter++;
+          if (this.go2Controller.stepCounter % this.go2Controller.decimation === 0) {
+            this.go2Controller.step();
           }
         }
       }
@@ -679,6 +820,33 @@ export class MuJoCoDemo {
       }
     }
 
+    // Update UI elements for Go2
+    if (this.go2Controller && this.params.scene.includes('unitree_go2')) {
+      const state = this.go2Controller.getState();
+      const elH = document.getElementById('stat-height');
+      const elL = document.getElementById('stat-left');
+      const elR = document.getElementById('stat-right');
+      const elStep = document.getElementById('stat-step');
+      const elSpeed = document.getElementById('speed-value');
+      const elPause = document.getElementById('btn-pause');
+      const elNeck = document.getElementById('stat-neck');
+      if (elH) elH.textContent = state.height;
+      if (elL) { elL.textContent = (state.contacts[0] || state.contacts[2]) ? 'Y' : 'N'; elL.style.color = (state.contacts[0] || state.contacts[2]) ? '#4caf50' : '#666'; }
+      if (elR) { elR.textContent = (state.contacts[1] || state.contacts[3]) ? 'Y' : 'N'; elR.style.color = (state.contacts[1] || state.contacts[3]) ? '#4caf50' : '#666'; }
+      if (elNeck) elNeck.textContent = state.trickPhase === 'idle' ? '--' : state.trickPhase;
+      if (elStep) elStep.textContent = this.go2Controller.stepCounter;
+      if (elSpeed) elSpeed.textContent = this.standHold ? '0.00' : Math.abs(this.go2Controller.commands.linX).toFixed(2);
+      if (elPause) {
+        if (this.params.paused) {
+          elPause.textContent = 'Space: PAUSED';
+          elPause.className = 'action-btn warn';
+        } else {
+          elPause.textContent = 'Space: Pause';
+          elPause.className = 'action-btn';
+        }
+      }
+    }
+
     // Update UI elements
     if (this.onnxController && this.params.scene.includes('openduck')) {
       const h = (this.data.qpos[2] || 0).toFixed(3);
@@ -705,6 +873,14 @@ export class MuJoCoDemo {
           elPause.className = 'action-btn';
         }
       }
+    }
+
+    // Camera follow - track the Go2's base body
+    if (this.params.cameraFollow && this.params.scene.includes('unitree_go2')) {
+      const baseX = this.data.qpos[0];
+      const baseY = this.data.qpos[1];
+      const baseZ = this.data.qpos[2];
+      this.controls.target.set(baseX, baseZ, -baseY);
     }
 
     // Camera follow - track the duck's base body
